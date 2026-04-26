@@ -1,4 +1,4 @@
-import { makeZip, downloadZip } from 'client-zip';
+import { makeZip } from 'client-zip';
 import { BatchItem } from './types';
 import { BatchStore } from './batch-store';
 
@@ -46,15 +46,81 @@ export async function createZipStream(
   return makeZip(entries);
 }
 
-export async function downloadAllAsZip(
-  items: BatchItem[],
-  filename: string = 'compressed-images.zip',
-  onProgress?: ProgressCallback,
-): Promise<void> {
-  const entries = createZipEntries(items, onProgress);
-  const response = downloadZip(entries);
+declare global {
+  interface FileSystemWritableFileStream {
+    write(chunk: Uint8Array): Promise<void>;
+    close(): Promise<void>;
+  }
 
-  const blob = await response.blob();
+  interface FileSystemFileHandle {
+    createWritable(): Promise<FileSystemWritableFileStream>;
+  }
+
+  interface Window {
+    showSaveFilePicker?: (options?: {
+      suggestedName?: string;
+      types?: Array<{
+        description?: string;
+        accept: Record<string, string[]>;
+      }>;
+    }) => Promise<FileSystemFileHandle>;
+  }
+}
+
+async function streamViaFileHandle(
+  stream: ReadableStream<Uint8Array>,
+  filename: string,
+  showSnack?: (message: string, options?: any) => void,
+): Promise<void> {
+  if (!window.showSaveFilePicker) {
+    throw new Error('File System Access API not supported');
+  }
+
+  const handle = await window.showSaveFilePicker({
+    suggestedName: filename,
+    types: [
+      {
+        description: 'ZIP Archive',
+        accept: {
+          'application/zip': ['.zip'],
+        },
+      },
+    ],
+  });
+
+  const writable = await handle.createWritable();
+  const reader = stream.getReader();
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        await writable.write(value);
+      }
+    }
+  } finally {
+    await writable.close();
+  }
+}
+
+async function streamViaBlob(
+  stream: ReadableStream<Uint8Array>,
+  filename: string,
+  showSnack?: (message: string, options?: any) => void,
+): Promise<void> {
+  const chunks: Uint8Array[] = [];
+  const reader = stream.getReader();
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+    }
+  }
+
+  const blob = new Blob(chunks, { type: 'application/zip' });
   const url = URL.createObjectURL(blob);
 
   try {
@@ -69,21 +135,50 @@ export async function downloadAllAsZip(
   }
 }
 
+export async function downloadAllAsZip(
+  items: BatchItem[],
+  filename: string = 'compressed-images.zip',
+  onProgress?: ProgressCallback,
+  showSnack?: (message: string, options?: any) => void,
+): Promise<void> {
+  const stream = await createZipStream(items, onProgress);
+
+  try {
+    if (window.showSaveFilePicker) {
+      await streamViaFileHandle(stream, filename, showSnack);
+    } else {
+      if (showSnack) {
+        showSnack('Preparing download... (large files may cause memory issues)', {
+          timeout: 5000,
+        });
+      }
+      await streamViaBlob(stream, filename, showSnack);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      return;
+    }
+    throw error;
+  }
+}
+
 export function streamZipToDownload(
   items: BatchItem[],
   filename: string = 'compressed-images.zip',
   onProgress?: ProgressCallback,
+  showSnack?: (message: string, options?: any) => void,
 ): Promise<void> {
-  return downloadAllAsZip(items, filename, onProgress);
+  return downloadAllAsZip(items, filename, onProgress, showSnack);
 }
 
 export async function createStreamingZipDownload(
   store: BatchStore,
   filename: string = 'compressed-images.zip',
   onProgress?: ProgressCallback,
+  showSnack?: (message: string, options?: any) => void,
 ): Promise<void> {
   const items = store.getItems();
-  return downloadAllAsZip(items, filename, onProgress);
+  return downloadAllAsZip(items, filename, onProgress, showSnack);
 }
 
 export function getCompletedItems(items: BatchItem[]): BatchItem[] {
