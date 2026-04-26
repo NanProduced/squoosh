@@ -97,11 +97,18 @@ export default class BatchItemCard extends Component<Props> {
   private getThumbnailUrl(): string | undefined {
     const { item } = this.props;
 
+    if (this.objectUrl) {
+      URL.revokeObjectURL(this.objectUrl);
+      this.objectUrl = undefined;
+    }
+
     if (item.compressedFile) {
-      if (this.objectUrl) {
-        URL.revokeObjectURL(this.objectUrl);
-      }
       this.objectUrl = URL.createObjectURL(item.compressedFile);
+      return this.objectUrl;
+    }
+
+    if (item.file) {
+      this.objectUrl = URL.createObjectURL(item.file);
       return this.objectUrl;
     }
 

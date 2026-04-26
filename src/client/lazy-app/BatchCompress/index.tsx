@@ -233,22 +233,25 @@ export default class BatchCompress extends Component<Props, State> {
     }
 
     try {
-      this.props.showSnack('Preparing download...', { timeout: 5000 });
-
       await createStreamingZipDownload(
         store,
         `compressed-${Date.now()}.zip`,
         ({ current, total, filename }) => {
           console.log(`Download progress: ${current}/${total} - ${filename}`);
-        }
+        },
+        this.props.showSnack
       );
 
       const completed = getCompletedItems(items).length;
       this.props.showSnack(`Downloaded ${completed} image(s)`, { timeout: 2000 });
     } catch (error) {
-      this.props.showSnack(`Download failed: ${(error as Error).message}`, {
-        timeout: 5000,
-      });
+      if (error instanceof Error && error.name === 'AbortError') {
+        this.props.showSnack('Download cancelled', { timeout: 2000 });
+      } else {
+        this.props.showSnack(`Download failed: ${(error as Error).message}`, {
+          timeout: 5000,
+        });
+      }
     }
   };
 
