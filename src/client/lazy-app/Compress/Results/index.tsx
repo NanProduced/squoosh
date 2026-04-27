@@ -4,8 +4,23 @@ import * as style from './style.css';
 import 'add-css:./style.css';
 import 'shared/custom-els/loading-spinner';
 import { SourceImage } from '../';
+import { ImageMetadata } from 'features/metadata/shared/types';
 import prettyBytes from './pretty-bytes';
 import { Arrow, DownloadIcon } from 'client/lazy-app/icons';
+
+function formatMetadata(metadata?: ImageMetadata): string[] {
+  const parts: string[] = [];
+  if (metadata?.exif) {
+    parts.push('EXIF');
+  }
+  if (metadata?.icc) {
+    parts.push('ICC');
+  }
+  if (metadata?.xmp) {
+    parts.push('XMP');
+  }
+  return parts;
+}
 
 interface Props {
   loading: boolean;
@@ -14,6 +29,7 @@ interface Props {
   downloadUrl?: string;
   flipSide: boolean;
   typeLabel: string;
+  compressedMetadata?: ImageMetadata;
 }
 
 interface State {
@@ -59,7 +75,7 @@ export default class Results extends Component<Props, State> {
   };
 
   render(
-    { source, imageFile, downloadUrl, flipSide, typeLabel }: Props,
+    { source, imageFile, downloadUrl, flipSide, typeLabel, compressedMetadata }: Props,
     { showLoadingState }: State,
   ) {
     const prettySize = imageFile && prettyBytes(imageFile.size);
@@ -72,6 +88,10 @@ export default class Results extends Component<Props, State> {
       const absolutePercent = Math.round(Math.abs(diff) * 100);
       percent = diff > 1 ? absolutePercent - 100 : 100 - absolutePercent;
     }
+
+    const sourceMetadataParts = formatMetadata(source?.metadata);
+    const compressedMetadataParts = formatMetadata(compressedMetadata);
+    const hasMetadataInfo = sourceMetadataParts.length > 0 || compressedMetadataParts.length > 0;
 
     return (
       <div
@@ -98,6 +118,27 @@ export default class Results extends Component<Props, State> {
                   '…'
                 )}
               </div>
+              {hasMetadataInfo && (
+                <div class={style.metadataInfo} title={
+                  isOriginal
+                    ? `Original metadata: ${sourceMetadataParts.length > 0 ? sourceMetadataParts.join(', ') : 'None'}`
+                    : `Compressed metadata: ${compressedMetadataParts.length > 0 ? compressedMetadataParts.join(', ') : 'None'}`
+                }>
+                  {isOriginal ? (
+                    <span class={sourceMetadataParts.length > 0 ? style.hasMetadata : style.noMetadata}>
+                      {sourceMetadataParts.length > 0
+                        ? `With: ${sourceMetadataParts.join(', ')}`
+                        : 'No metadata'}
+                    </span>
+                  ) : (
+                    <span class={compressedMetadataParts.length > 0 ? style.hasMetadata : style.noMetadata}>
+                      {compressedMetadataParts.length > 0
+                        ? `With: ${compressedMetadataParts.join(', ')}`
+                        : 'No metadata'}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
             <div class={style.percentInfo}>
               <svg
