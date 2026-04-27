@@ -33,8 +33,6 @@ import { resize } from 'features/processors/resize/client';
 import type SnackBarElement from 'shared/custom-els/snack-bar';
 import { drawableToImageData } from '../util/canvas';
 import {
-  WorkerPool,
-  defaultWorkerPool,
   binarySearchQuality,
   SearchResult,
   BinarySearchParams,
@@ -366,7 +364,6 @@ export default class Compress extends Component<Props, State> {
     new WorkerBridge(),
     new WorkerBridge(),
   ];
-  private readonly workerPool = new WorkerPool({ maxConcurrent: 4 });
   private mainAbortController = new AbortController();
   private sideAbortControllers = [
     new AbortController(),
