@@ -15,9 +15,20 @@ import {
 import Expander from './Expander';
 import Toggle from './Toggle';
 import Select from './Select';
+import Checkbox from './Checkbox';
 import { Options as QuantOptionsComponent } from 'features/processors/quantize/client';
 import { Options as ResizeOptionsComponent } from 'features/processors/resize/client';
 import { ImportIcon, SaveIcon, SwapIcon } from 'client/lazy-app/icons';
+import { MetadataOptions, defaultMetadataOptions, getOrientationDegrees } from 'features/metadata/shared';
+import {
+  inputFieldChecked,
+  inputFieldValueAsNumber,
+  preventDefault,
+} from 'client/lazy-app/util';
+
+function supportsMetadata(encoderType: string): boolean {
+  return encoderType === 'mozJPEG' || encoderType === 'webP' || encoderType === 'browserJPEG';
+}
 
 interface Props {
   index: 0 | 1;
@@ -25,9 +36,11 @@ interface Props {
   source?: SourceImage;
   encoderState?: EncoderState;
   processorState: ProcessorState;
+  metadataOptions: MetadataOptions;
   onEncoderTypeChange(index: 0 | 1, newType: OutputType): void;
   onEncoderOptionsChange(index: 0 | 1, newOptions: EncoderOptions): void;
   onProcessorOptionsChange(index: 0 | 1, newOptions: ProcessorState): void;
+  onMetadataOptionsChange(index: 0 | 1, newOptions: MetadataOptions): void;
   onCopyToOtherSideClick(index: 0 | 1): void;
   onSaveSideSettingsClick(index: 0 | 1): void;
   onImportSideSettingsClick(index: 0 | 1): void;
@@ -147,13 +160,30 @@ export default class Options extends Component<Props, State> {
     this.props.onImportSideSettingsClick(this.props.index);
   };
 
+  private onMetadataOptionsChange = (event: Event) => {
+    const form = (event.currentTarget as HTMLInputElement).closest(
+      'form',
+    ) as HTMLFormElement;
+    const { metadataOptions } = this.props;
+
+    const newOptions: MetadataOptions = {
+      keepExif: inputFieldChecked(form.keepExif, metadataOptions.keepExif),
+      keepIcc: inputFieldChecked(form.keepIcc, metadataOptions.keepIcc),
+      keepXmp: inputFieldChecked(form.keepXmp, metadataOptions.keepXmp),
+      autoRotate: inputFieldChecked(form.autoRotate, metadataOptions.autoRotate),
+    };
+    this.props.onMetadataOptionsChange(this.props.index, newOptions);
+  };
+
   render(
-    { source, encoderState, processorState }: Props,
+    { source, encoderState, processorState, metadataOptions }: Props,
     { supportedEncoderMap }: State,
   ) {
     const encoder = encoderState && encoderMap[encoderState.type];
     const EncoderOptionComponent =
       encoder && 'Options' in encoder ? encoder.Options : undefined;
+    const canSaveMetadata = encoderState && supportsMetadata(encoderState.type);
+    const hasSourceMetadata = source && (source.metadata.exif || source.metadata.icc || source.metadata.xmp);
 
     return (
       <div
@@ -198,7 +228,6 @@ export default class Options extends Component<Props, State> {
                     title="Import saved side settings"
                     onClick={this.onImportSideSettingsClick}
                     disabled={
-                      // Disabled if this side's settings haven't been saved
                       (!this.state.leftSideSettings &&
                         this.props.index === 0) ||
                       (!this.state.rightSideSettings && this.props.index === 1)
@@ -275,14 +304,87 @@ export default class Options extends Component<Props, State> {
           {EncoderOptionComponent && (
             <EncoderOptionComponent
               options={
-                // Casting options, as encoderOptionsComponentMap[encodeData.type] ensures
-                // the correct type, but typescript isn't smart enough.
                 encoderState!.options as any
               }
               onChange={this.onEncoderOptionsChange}
             />
           )}
         </Expander>
+
+        {encoderState && (
+          <section class={style.optionsSection}>
+            <h3 class={style.optionsTitle}>Metadata</h3>
+            <form onSubmit={preventDefault}>
+              {!canSaveMetadata ? (
+                <div class={style.optionToggle}>
+                  <p class={style.metadataInfo}>
+                    <span class={style.metadataDisabled}>
+                      This format does not support metadata preservation.
+                    </span>
+                    <br />
+                    <small class={style.metadataHint}>
+                      Only JPEG (MozJPEG, Browser JPEG) and WebP formats 
+                      support EXIF, ICC, and XMP metadata.
+                    </small>
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  {hasSourceMetadata && (
+                    <p class={style.metadataHint}>
+                      Source image contains:
+                      {source!.metadata.exif && ' EXIF'}
+                      {source!.metadata.icc && ' ICC'}
+                      {source!.metadata.xmp && ' XMP'}
+                    </p>
+                  )}
+                  <label class={style.optionToggle}>
+                    Keep EXIF data
+                    <Checkbox
+                      name="keepExif"
+                      checked={metadataOptions.keepExif}
+                      onChange={this.onMetadataOptionsChange}
+                      disabled={!source?.metadata.exif}
+                    />
+                  </label>
+                  <label class={style.optionToggle}>
+                    Keep ICC color profile
+                    <Checkbox
+                      name="keepIcc"
+                      checked={metadataOptions.keepIcc}
+                      onChange={this.onMetadataOptionsChange}
+                      disabled={!source?.metadata.icc}
+                    />
+                  </label>
+                  <label class={style.optionToggle}>
+                    Keep XMP metadata
+                    <Checkbox
+                      name="keepXmp"
+                      checked={metadataOptions.keepXmp}
+                      onChange={this.onMetadataOptionsChange}
+                      disabled={!source?.metadata.xmp}
+                    />
+                  </label>
+                  <label class={style.optionToggle}>
+                    Auto rotate (by EXIF orientation)
+                    <Checkbox
+                      name="autoRotate"
+                      checked={metadataOptions.autoRotate}
+                      onChange={this.onMetadataOptionsChange}
+                      disabled={!source?.metadata.orientation || source.metadata.orientation === 1}
+                    />
+                  </label>
+                  {source?.metadata.orientation && source.metadata.orientation !== 1 && (
+                    <p class={style.metadataHint}>
+                      Current orientation: {source.metadata.orientation} 
+                      (needs {getOrientationDegrees(source.metadata.orientation)}° rotation)
+                    </p>
+                  )}
+                </div>
+              )}
+            </form>
+          </section>
+        )}
       </div>
     );
   }
