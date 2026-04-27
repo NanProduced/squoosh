@@ -1,9 +1,13 @@
 /**
  * Client-side metadata utilities.
  * These run in the main thread for binary parsing.
- * Optimized to minimize memory usage:
- * - Detection: only read headers, no data copying
- * - Extraction: only copy data when needed for injection
+ *
+ * Key optimizations:
+ * 1. JPEG APP2 multi-segment ICC profile handling: ICC profiles can be split into
+ *    multiple APP2 segments with sequence numbers. We collect all segments and
+ *    concatenate them in the correct order.
+ * 2. Memory efficiency: Use views instead of copying data where possible.
+ *    The caller should use file.slice(0, 128 * 1024) for header-only scanning.
  */
 
 import { ImageMetadata, MetadataPresence, MetadataOptions, getMetadataSupport } from '../shared/types';
@@ -23,6 +27,8 @@ const WEBP = 0x50424557;
 const EXIF_FOURCC = 0x46495845;
 const XMP_FOURCC = 0x504d5820;
 const ICCP_FOURCC = 0x50434349;
+
+const MAX_APP2_SEGMENT_SIZE = 65500;
 
 export function isJpeg(buffer: ArrayBuffer): boolean {
   const view = new DataView(buffer);
@@ -72,14 +78,14 @@ function detectJpegMetadataPresence(buffer: ArrayBuffer): MetadataPresence {
     if (segmentEnd > bytes.length) break;
 
     if (marker === APP1) {
-      const segmentData = new Uint8Array(buffer, offset + 2, length - 2);
+      const segmentData = new Uint8Array(buffer, offset + 2, Math.min(length - 2, 14));
       if (matchesIdentifier(segmentData, EXIF_IDENTIFIER)) {
         presence.hasExif = true;
-      } else if (matchesIdentifier(segmentData, XMP_IDENTIFIER)) {
+      } else if (segmentData.length >= XMP_IDENTIFIER.length && matchesIdentifier(segmentData, XMP_IDENTIFIER)) {
         presence.hasXmp = true;
       }
     } else if (marker === APP2) {
-      const segmentData = new Uint8Array(buffer, offset + 2, length - 2);
+      const segmentData = new Uint8Array(buffer, offset + 2, Math.min(length - 2, 14));
       if (matchesIdentifier(segmentData, ICC_IDENTIFIER)) {
         presence.hasIcc = true;
       }
@@ -144,11 +150,20 @@ export function parseMetadataFromBuffer(buffer: ArrayBuffer, mimeType: string): 
   return {};
 }
 
+interface IccSegment {
+  seqNum: number;
+  totalSegments: number;
+  data: Uint8Array;
+  rawSegment: Uint8Array;
+}
+
 function parseJpegMetadata(buffer: ArrayBuffer): ImageMetadata {
   const metadata: ImageMetadata = {};
   const view = new DataView(buffer);
   const bytes = new Uint8Array(buffer);
   let offset = 2;
+
+  const iccSegments: IccSegment[] = [];
 
   while (offset < bytes.length - 2) {
     if (bytes[offset] !== 0xff) {
@@ -171,16 +186,29 @@ function parseJpegMetadata(buffer: ArrayBuffer): ImageMetadata {
     if (segmentEnd > bytes.length) break;
 
     if (marker === APP1) {
-      const segmentData = new Uint8Array(buffer, offset + 2, length - 2);
-      if (matchesIdentifier(segmentData, EXIF_IDENTIFIER)) {
+      const headerData = new Uint8Array(buffer, offset + 2, Math.min(length - 2, 14));
+      if (matchesIdentifier(headerData, EXIF_IDENTIFIER)) {
         metadata.exif = buffer.slice(offset - 2, segmentEnd);
-      } else if (matchesIdentifier(segmentData, XMP_IDENTIFIER)) {
+      } else if (headerData.length >= XMP_IDENTIFIER.length && matchesIdentifier(headerData, XMP_IDENTIFIER)) {
         metadata.xmp = buffer.slice(offset - 2, segmentEnd);
       }
     } else if (marker === APP2) {
-      const segmentData = new Uint8Array(buffer, offset + 2, length - 2);
-      if (matchesIdentifier(segmentData, ICC_IDENTIFIER)) {
-        metadata.icc = buffer.slice(offset - 2, segmentEnd);
+      const headerData = new Uint8Array(buffer, offset + 2, Math.min(length - 2, 14));
+      if (matchesIdentifier(headerData, ICC_IDENTIFIER)) {
+        const seqNum = bytes[offset + 2 + ICC_IDENTIFIER.length];
+        const totalSegments = bytes[offset + 2 + ICC_IDENTIFIER.length + 1];
+
+        const iccDataStart = offset + 2 + ICC_IDENTIFIER.length + 2;
+        const iccDataEnd = segmentEnd;
+
+        if (iccDataStart < iccDataEnd) {
+          iccSegments.push({
+            seqNum,
+            totalSegments,
+            data: bytes.slice(iccDataStart, iccDataEnd),
+            rawSegment: bytes.slice(offset - 2, segmentEnd),
+          });
+        }
       }
     } else if (marker === APP13) {
       if (length > 14) {
@@ -197,7 +225,128 @@ function parseJpegMetadata(buffer: ArrayBuffer): ImageMetadata {
     offset = segmentEnd;
   }
 
+  if (iccSegments.length > 0) {
+    metadata.icc = reconstructIccProfile(iccSegments);
+  }
+
   return metadata;
+}
+
+function reconstructIccProfile(segments: IccSegment[]): ArrayBuffer | undefined {
+  if (segments.length === 0) return undefined;
+
+  const maxSeq = Math.max(...segments.map(s => s.totalSegments));
+
+  if (segments.length === 1 && maxSeq === 1) {
+    return segments[0].rawSegment.buffer.slice(
+      segments[0].rawSegment.byteOffset,
+      segments[0].rawSegment.byteOffset + segments[0].rawSegment.length
+    );
+  }
+
+  const sorted = segments.slice().sort((a, b) => a.seqNum - b.seqNum);
+
+  const expectedSegments = sorted[0]?.totalSegments || maxSeq;
+
+  if (sorted.length < expectedSegments) {
+    console.warn(`Missing ICC segments: expected ${expectedSegments}, got ${sorted.length}`);
+  }
+
+  const expectedHeaderSize = 2 + 12 + 2;
+  let totalIccDataSize = 0;
+  for (const seg of sorted) {
+    totalIccDataSize += seg.data.length;
+  }
+
+  if (sorted.length === 1) {
+    return sorted[0].rawSegment.buffer.slice(
+      sorted[0].rawSegment.byteOffset,
+      sorted[0].rawSegment.byteOffset + sorted[0].rawSegment.length
+    );
+  }
+
+  const newSegments = splitIccIntoApp2Segments(sorted);
+  return mergeApp2Segments(newSegments);
+}
+
+function splitIccIntoApp2Segments(segments: IccSegment[]): IccSegment[] {
+  let totalIccData = new Uint8Array(0);
+  for (const seg of segments.sort((a, b) => a.seqNum - b.seqNum)) {
+    const newData = new Uint8Array(totalIccData.length + seg.data.length);
+    newData.set(totalIccData, 0);
+    newData.set(seg.data, totalIccData.length);
+    totalIccData = newData;
+  }
+
+  const headerSize = 2 + ICC_IDENTIFIER.length + 2;
+  const maxDataPerSegment = MAX_APP2_SEGMENT_SIZE - headerSize;
+
+  const result: IccSegment[] = [];
+  let offset = 0;
+  let seqNum = 1;
+
+  while (offset < totalIccData.length) {
+    const chunkSize = Math.min(maxDataPerSegment, totalIccData.length - offset);
+    const chunk = totalIccData.slice(offset, offset + chunkSize);
+
+    const segmentSize = headerSize + chunkSize;
+    const rawSegment = new Uint8Array(segmentSize);
+    const view = new DataView(rawSegment.buffer);
+
+    view.setUint16(0, APP2, false);
+    view.setUint16(2, segmentSize - 2, false);
+
+    for (let i = 0; i < ICC_IDENTIFIER.length; i++) {
+      rawSegment[4 + i] = ICC_IDENTIFIER.charCodeAt(i);
+    }
+
+    rawSegment[4 + ICC_IDENTIFIER.length] = seqNum;
+    rawSegment[5 + ICC_IDENTIFIER.length] = 0;
+
+    rawSegment.set(chunk, 6 + ICC_IDENTIFIER.length);
+
+    result.push({
+      seqNum,
+      totalSegments: 0,
+      data: chunk,
+      rawSegment,
+    });
+
+    offset += chunkSize;
+    seqNum++;
+  }
+
+  const totalSegments = result.length;
+  for (const seg of result) {
+    seg.totalSegments = totalSegments;
+    seg.rawSegment[5 + ICC_IDENTIFIER.length] = totalSegments;
+  }
+
+  return result;
+}
+
+function mergeApp2Segments(segments: IccSegment[]): ArrayBuffer {
+  if (segments.length === 1) {
+    return segments[0].rawSegment.buffer.slice(
+      segments[0].rawSegment.byteOffset,
+      segments[0].rawSegment.byteOffset + segments[0].rawSegment.length
+    );
+  }
+
+  let totalSize = 0;
+  for (const seg of segments) {
+    totalSize += seg.rawSegment.length;
+  }
+
+  const result = new Uint8Array(totalSize);
+  let offset = 0;
+
+  for (const seg of segments.sort((a, b) => a.seqNum - b.seqNum)) {
+    result.set(seg.rawSegment, offset);
+    offset += seg.rawSegment.length;
+  }
+
+  return result.buffer;
 }
 
 function parseWebPMetadata(buffer: ArrayBuffer): ImageMetadata {
@@ -243,7 +392,7 @@ export function injectMetadataIntoBuffer(
   targetMimeType: string,
 ): ArrayBuffer {
   const support = getMetadataSupport(targetMimeType);
-  
+
   if (targetMimeType === 'image/jpeg' || isJpeg(compressedBuffer)) {
     return injectJpegMetadata(compressedBuffer, metadata, {
       keepExif: options.keepExif && support.supportsExif,
@@ -267,7 +416,7 @@ function injectJpegMetadata(
 ): ArrayBuffer {
   const view = new DataView(compressedBuffer);
   const bytes = new Uint8Array(compressedBuffer);
-  
+
   const segments: { marker: number; data: Uint8Array; raw: Uint8Array }[] = [];
   let offset = 2;
   let app0Found = false;
@@ -394,12 +543,27 @@ function createJpegMetadataSegments(
 
   if (options.keepIcc && metadata.icc) {
     const raw = new Uint8Array(metadata.icc);
-    const view = new DataView(raw.buffer, raw.byteOffset);
-    segments.push({
-      marker: view.getUint16(0, false),
-      data: raw.slice(4),
-      raw: raw
-    });
+    let offset = 0;
+
+    while (offset < raw.length) {
+      if (offset + 2 > raw.length) break;
+      const marker = (raw[offset] << 8) | raw[offset + 1];
+      if (marker !== APP2) break;
+
+      if (offset + 4 > raw.length) break;
+      const length = (raw[offset + 2] << 8) | raw[offset + 3];
+      const segmentEnd = offset + 2 + length;
+
+      if (segmentEnd > raw.length) break;
+
+      segments.push({
+        marker: APP2,
+        data: raw.slice(offset + 4, segmentEnd),
+        raw: raw.slice(offset, segmentEnd)
+      });
+
+      offset = segmentEnd;
+    }
   }
 
   return segments;
@@ -447,7 +611,7 @@ function injectWebPMetadata(
           const width = getWebPWidth(compressedBuffer);
           const height = getWebPHeight(compressedBuffer);
           if (width > 0 && height > 0) {
-            const flags = (options.keepExif && metadata.exif ? 0x08 : 0) | 
+            const flags = (options.keepExif && metadata.exif ? 0x08 : 0) |
                          (options.keepXmp && metadata.xmp ? 0x04 : 0);
             newChunks.push(createVp8xChunk(width, height, flags));
             hasVp8x = true;
@@ -485,6 +649,7 @@ function injectWebPMetadata(
   resultView.setUint32(8, WEBP, true);
 
   offset = 12;
+
   for (const chunk of newChunks) {
     resultView.setUint32(offset, chunk.fourCC, true);
     resultView.setUint32(offset + 4, chunk.size, true);
@@ -503,30 +668,27 @@ function createWebPMetadataChunks(
 
   if (options.keepExif && metadata.exif) {
     const raw = new Uint8Array(metadata.exif);
-    const view = new DataView(raw.buffer, raw.byteOffset);
     chunks.push({
-      fourCC: view.getUint32(0, true),
-      size: view.getUint32(4, true),
-      data: raw.slice(8)
-    });
-  }
-
-  if (options.keepIcc && metadata.icc) {
-    const raw = new Uint8Array(metadata.icc);
-    const view = new DataView(raw.buffer, raw.byteOffset);
-    chunks.push({
-      fourCC: view.getUint32(0, true),
-      size: view.getUint32(4, true),
+      fourCC: EXIF_FOURCC,
+      size: raw.length - 8,
       data: raw.slice(8)
     });
   }
 
   if (options.keepXmp && metadata.xmp) {
     const raw = new Uint8Array(metadata.xmp);
-    const view = new DataView(raw.buffer, raw.byteOffset);
     chunks.push({
-      fourCC: view.getUint32(0, true),
-      size: view.getUint32(4, true),
+      fourCC: XMP_FOURCC,
+      size: raw.length - 8,
+      data: raw.slice(8)
+    });
+  }
+
+  if (options.keepIcc && metadata.icc) {
+    const raw = new Uint8Array(metadata.icc);
+    chunks.push({
+      fourCC: ICCP_FOURCC,
+      size: raw.length - 8,
       data: raw.slice(8)
     });
   }
@@ -542,18 +704,22 @@ function getWebPWidth(buffer: ArrayBuffer): number {
   while (offset < bytes.length - 8) {
     const fourCC = view.getUint32(offset, true);
     const size = view.getUint32(offset + 4, true);
+    const paddedSize = (size + 1) & ~1;
 
-    if (fourCC === 0x20385056 && size >= 10) {
-      const keyFrame = (bytes[offset + 11] & 1) === 0;
-      if (keyFrame) {
-        return view.getUint16(offset + 14, true) & 0x3fff;
-      }
-    } else if (fourCC === 0x4c385056 && size >= 5) {
-      const info = view.getUint32(offset + 9, true);
-      return (info & 0x3fff) + 1;
+    if (offset + 8 + paddedSize > bytes.length) break;
+
+    if (fourCC === 0x58385056) {
+      const widthMinusOne = view.getUint24(offset + 8, true);
+      return widthMinusOne + 1;
+    } else if (fourCC === 0x20385056) {
+      const widthMinusOne = view.getUint24(offset + 8 + 3, true);
+      return widthMinusOne + 1;
+    } else if (fourCC === 0x4c385056) {
+      const widthMinusOne = view.getUint16(offset + 8 + 1, true) & 0x3fff;
+      return widthMinusOne + 1;
     }
 
-    offset += 8 + ((size + 1) & ~1);
+    offset += 8 + paddedSize;
   }
   return 0;
 }
@@ -566,18 +732,22 @@ function getWebPHeight(buffer: ArrayBuffer): number {
   while (offset < bytes.length - 8) {
     const fourCC = view.getUint32(offset, true);
     const size = view.getUint32(offset + 4, true);
+    const paddedSize = (size + 1) & ~1;
 
-    if (fourCC === 0x20385056 && size >= 10) {
-      const keyFrame = (bytes[offset + 11] & 1) === 0;
-      if (keyFrame) {
-        return view.getUint16(offset + 16, true) & 0x3fff;
-      }
-    } else if (fourCC === 0x4c385056 && size >= 5) {
-      const info = view.getUint32(offset + 9, true);
-      return ((info >> 14) & 0x3fff) + 1;
+    if (offset + 8 + paddedSize > bytes.length) break;
+
+    if (fourCC === 0x58385056) {
+      const heightMinusOne = view.getUint24(offset + 8 + 3, true);
+      return heightMinusOne + 1;
+    } else if (fourCC === 0x20385056) {
+      const heightMinusOne = view.getUint24(offset + 8 + 6, true);
+      return heightMinusOne + 1;
+    } else if (fourCC === 0x4c385056) {
+      const heightMinusOne = view.getUint16(offset + 8 + 3, true) & 0x3fff;
+      return heightMinusOne + 1;
     }
 
-    offset += 8 + ((size + 1) & ~1);
+    offset += 8 + paddedSize;
   }
   return 0;
 }
@@ -585,75 +755,68 @@ function getWebPHeight(buffer: ArrayBuffer): number {
 function createVp8xChunk(
   width: number,
   height: number,
-  flags: number
+  flags: number,
 ): { fourCC: number; size: number; data: Uint8Array } {
   const data = new Uint8Array(10);
   const view = new DataView(data.buffer);
 
-  data[0] = flags;
-  view.setUint32(1, (width - 1) & 0xffffff, true);
-  view.setUint32(4, ((height - 1) << 8) | (((width - 1) >> 24) & 0xff), true);
+  view.setUint8(0, flags);
+
+  const reservedBytes = new Uint8Array(3);
+  view.setUint8(1, reservedBytes[0]);
+  view.setUint8(2, reservedBytes[1]);
+  view.setUint8(3, reservedBytes[2]);
+
+  view.setUint24(4, width - 1, true);
+  view.setUint24(7, height - 1, true);
 
   return {
     fourCC: 0x58385056,
     size: 10,
-    data
+    data: data
   };
 }
 
 export function clearOrientationFromExif(exifBuffer: ArrayBuffer): ArrayBuffer {
-  const data = new Uint8Array(exifBuffer);
   const view = new DataView(exifBuffer);
-  
-  if (data[0] !== 0xff || data[1] !== 0xe1) {
+  const bytes = new Uint8Array(exifBuffer);
+
+  if (view.getUint16(0, false) !== APP1) {
     return exifBuffer;
   }
 
-  const tiffOffset = 10;
-  if (tiffOffset + 8 > data.length) return exifBuffer;
+  const headerData = new Uint8Array(exifBuffer, 4, Math.min(6, exifBuffer.byteLength - 4));
+  if (!matchesIdentifier(headerData, 'Exif\0')) {
+    return exifBuffer;
+  }
 
-  const byteOrder = data[tiffOffset];
-  const isLittleEndian = byteOrder === 0x49;
+  const tiffOffset = 4 + 6;
+  if (tiffOffset + 8 > exifBuffer.byteLength) {
+    return exifBuffer;
+  }
 
-  const ifdOffset = isLittleEndian
-    ? view.getUint32(tiffOffset + 4, true)
-    : view.getUint32(tiffOffset + 4, false);
+  const byteOrder = view.getUint16(tiffOffset, false);
+  const isLittleEndian = byteOrder === 0x4949;
 
-  const ifdAbsOffset = tiffOffset + ifdOffset;
-  if (ifdAbsOffset + 2 > data.length) return exifBuffer;
+  const numDirEntries = view.getUint16(tiffOffset + 8, isLittleEndian);
+  let dirOffset = tiffOffset + 10;
 
-  const numEntries = isLittleEndian
-    ? view.getUint16(ifdAbsOffset, true)
-    : view.getUint16(ifdAbsOffset, false);
+  for (let i = 0; i < numDirEntries; i++) {
+    if (dirOffset + 12 > exifBuffer.byteLength) break;
 
-  for (let i = 0; i < numEntries; i++) {
-    const entryOffset = ifdAbsOffset + 2 + i * 12;
-    if (entryOffset + 12 > data.length) break;
-
-    const tag = isLittleEndian
-      ? view.getUint16(entryOffset, true)
-      : view.getUint16(entryOffset, false);
+    const tag = view.getUint16(dirOffset, isLittleEndian);
 
     if (tag === 0x0112) {
-      const type = isLittleEndian
-        ? view.getUint16(entryOffset + 2, true)
-        : view.getUint16(entryOffset + 2, false);
-      const count = isLittleEndian
-        ? view.getUint32(entryOffset + 4, true)
-        : view.getUint32(entryOffset + 4, false);
+      const type = view.getUint16(dirOffset + 2, isLittleEndian);
+      const count = view.getUint32(dirOffset + 4, isLittleEndian);
 
       if (type === 3 && count === 1) {
-        const result = new Uint8Array(exifBuffer);
-        const resultView = new DataView(result.buffer);
-        if (isLittleEndian) {
-          resultView.setUint16(entryOffset + 8, 1, true);
-        } else {
-          resultView.setUint16(entryOffset + 8, 1, false);
-        }
-        return result.buffer;
+        view.setUint16(dirOffset + 8, 1, isLittleEndian);
       }
       break;
     }
+
+    dirOffset += 12;
   }
 
   return exifBuffer;
