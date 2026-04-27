@@ -3,6 +3,7 @@ import { h, Component } from 'preact';
 import * as style from './style.css';
 import 'add-css:./style.css';
 import { cleanSet, cleanMerge } from '../../util/clean-modify';
+import linkState from 'linkstate';
 
 import type { SourceImage, OutputType } from '..';
 import {
@@ -18,6 +19,9 @@ import Select from './Select';
 import { Options as QuantOptionsComponent } from 'features/processors/quantize/client';
 import { Options as ResizeOptionsComponent } from 'features/processors/resize/client';
 import { ImportIcon, SaveIcon, SwapIcon } from 'client/lazy-app/icons';
+import { MetadataOptions, getMetadataSupport, defaultMetadataOptions } from 'features/metadata/shared/types';
+import Checkbox from './Checkbox';
+import Revealer from './Revealer';
 
 interface Props {
   index: 0 | 1;
@@ -25,9 +29,11 @@ interface Props {
   source?: SourceImage;
   encoderState?: EncoderState;
   processorState: ProcessorState;
+  metadataOptions: MetadataOptions;
   onEncoderTypeChange(index: 0 | 1, newType: OutputType): void;
   onEncoderOptionsChange(index: 0 | 1, newOptions: EncoderOptions): void;
   onProcessorOptionsChange(index: 0 | 1, newOptions: ProcessorState): void;
+  onMetadataOptionsChange(index: 0 | 1, newOptions: MetadataOptions): void;
   onCopyToOtherSideClick(index: 0 | 1): void;
   onSaveSideSettingsClick(index: 0 | 1): void;
   onImportSideSettingsClick(index: 0 | 1): void;
@@ -37,6 +43,7 @@ interface State {
   supportedEncoderMap?: PartialButNotUndefined<typeof encoderMap>;
   leftSideSettings?: string | null;
   rightSideSettings?: string | null;
+  showAdvancedMetadata: boolean;
 }
 
 type PartialButNotUndefined<T> = {
@@ -66,6 +73,7 @@ export default class Options extends Component<Props, State> {
     supportedEncoderMap: undefined,
     leftSideSettings: localStorage.getItem('leftSideSettings'),
     rightSideSettings: localStorage.getItem('rightSideSettings'),
+    showAdvancedMetadata: true,
   };
 
   constructor() {
@@ -88,7 +96,6 @@ export default class Options extends Component<Props, State> {
   };
 
   componentDidMount(): void {
-    // Changing the state when side setting is stored in localstorage
     window.addEventListener('leftSideSettings', this.setLeftSideSettings);
     window.addEventListener('rightSideSettings', this.setRightSideSettings);
   }
@@ -100,9 +107,6 @@ export default class Options extends Component<Props, State> {
 
   private onEncoderTypeChange = (event: Event) => {
     const el = event.currentTarget as HTMLSelectElement;
-
-    // The select element only has values matching encoder types,
-    // so 'as' is safe here.
     const type = el.value as OutputType;
     this.props.onEncoderTypeChange(this.props.index, type);
   };
@@ -135,6 +139,16 @@ export default class Options extends Component<Props, State> {
     this.props.onEncoderOptionsChange(this.props.index, newOptions);
   };
 
+  private onMetadataOptionChange = (event: Event) => {
+    const el = event.currentTarget as HTMLInputElement;
+    const option = el.name as keyof MetadataOptions;
+    const newOptions: MetadataOptions = {
+      ...this.props.metadataOptions,
+      [option]: el.checked,
+    };
+    this.props.onMetadataOptionsChange(this.props.index, newOptions);
+  };
+
   private onCopyToOtherSideClick = () => {
     this.props.onCopyToOtherSideClick(this.props.index);
   };
@@ -148,12 +162,16 @@ export default class Options extends Component<Props, State> {
   };
 
   render(
-    { source, encoderState, processorState }: Props,
-    { supportedEncoderMap }: State,
+    { source, encoderState, processorState, metadataOptions }: Props,
+    { supportedEncoderMap, showAdvancedMetadata }: State,
   ) {
     const encoder = encoderState && encoderMap[encoderState.type];
     const EncoderOptionComponent =
       encoder && 'Options' in encoder ? encoder.Options : undefined;
+
+    const targetMimeType = encoder ? encoder.meta.mimeType : source?.sourceMimeType || '';
+    const metadataSupport = getMetadataSupport(targetMimeType);
+    const hasSourceMetadata = source?.metadata && (source.metadata.exif || source.metadata.icc || source.metadata.xmp);
 
     return (
       <div
@@ -198,7 +216,6 @@ export default class Options extends Component<Props, State> {
                     title="Import saved side settings"
                     onClick={this.onImportSideSettingsClick}
                     disabled={
-                      // Disabled if this side's settings haven't been saved
                       (!this.state.leftSideSettings &&
                         this.props.index === 0) ||
                       (!this.state.rightSideSettings && this.props.index === 1)
@@ -275,14 +292,92 @@ export default class Options extends Component<Props, State> {
           {EncoderOptionComponent && (
             <EncoderOptionComponent
               options={
-                // Casting options, as encoderOptionsComponentMap[encodeData.type] ensures
-                // the correct type, but typescript isn't smart enough.
                 encoderState!.options as any
               }
               onChange={this.onEncoderOptionsChange}
             />
           )}
         </Expander>
+
+        {encoderState ? (
+          <section class={style.optionsSection}>
+            <label class={style.optionReveal}>
+              <Revealer
+                checked={showAdvancedMetadata}
+                onChange={linkState(this, 'showAdvancedMetadata')}
+              />
+              Keep metadata
+              {hasSourceMetadata ? (
+                <span title="Source image contains metadata">
+                  (Has EXIF/ICC/XMP)
+                </span>
+              ) : null}
+            </label>
+            <Expander>
+              {showAdvancedMetadata ? (
+                <div>
+                  <div class={style.optionToggle}>
+                    <span
+                      title={
+                        metadataSupport.supportsExif
+                          ? 'Keep EXIF metadata (camera info, orientation, etc.)'
+                          : `EXIF not supported by ${encoder?.meta.label || 'this format'}`
+                      }
+                    >
+                      Keep EXIF
+                    </span>
+                    <Checkbox
+                      name="keepExif"
+                      checked={metadataOptions.keepExif && metadataSupport.supportsExif}
+                      disabled={!metadataSupport.supportsExif}
+                      onChange={this.onMetadataOptionChange}
+                    />
+                  </div>
+                  <div class={style.optionToggle}>
+                    <span
+                      title={
+                        metadataSupport.supportsIcc
+                          ? 'Keep ICC color profile'
+                          : `ICC profile not supported by ${encoder?.meta.label || 'this format'}`
+                      }
+                    >
+                      Keep ICC Profile
+                    </span>
+                    <Checkbox
+                      name="keepIcc"
+                      checked={metadataOptions.keepIcc && metadataSupport.supportsIcc}
+                      disabled={!metadataSupport.supportsIcc}
+                      onChange={this.onMetadataOptionChange}
+                    />
+                  </div>
+                  <div class={style.optionToggle}>
+                    <span
+                      title={
+                        metadataSupport.supportsXmp
+                          ? 'Keep XMP metadata (extended metadata)'
+                          : `XMP not supported by ${encoder?.meta.label || 'this format'}`
+                      }
+                    >
+                      Keep XMP
+                    </span>
+                    <Checkbox
+                      name="keepXmp"
+                      checked={metadataOptions.keepXmp && metadataSupport.supportsXmp}
+                      disabled={!metadataSupport.supportsXmp}
+                      onChange={this.onMetadataOptionChange}
+                    />
+                  </div>
+                  {!(metadataSupport.supportsExif && metadataSupport.supportsIcc && metadataSupport.supportsXmp) ? (
+                    <div class={style.optionOneCell} style={{ paddingTop: 0, color: '#888', fontSize: '0.85em' }}>
+                      Note: {encoder?.meta.label || 'This format'} does not support some metadata types.
+                      Disabled options will be ignored during compression.
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </Expander>
+          </section>
+        ) : null}
       </div>
     );
   }
