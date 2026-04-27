@@ -172,6 +172,14 @@ export default class Options extends Component<Props, State> {
     const targetMimeType = encoder ? encoder.meta.mimeType : source?.sourceMimeType || '';
     const metadataSupport = getMetadataSupport(targetMimeType);
     const hasSourceMetadata = source?.metadata && (source.metadata.exif || source.metadata.icc || source.metadata.xmp);
+    
+    const hasSourceExif = !!source?.metadata?.exif;
+    const hasSourceIcc = !!source?.metadata?.icc;
+    const hasSourceXmp = !!source?.metadata?.xmp;
+    
+    const canKeepExif = hasSourceExif && metadataSupport.supportsExif;
+    const canKeepIcc = hasSourceIcc && metadataSupport.supportsIcc;
+    const canKeepXmp = hasSourceXmp && metadataSupport.supportsXmp;
 
     return (
       <div
@@ -319,57 +327,69 @@ export default class Options extends Component<Props, State> {
                   <div class={style.optionToggle}>
                     <span
                       title={
-                        metadataSupport.supportsExif
+                        canKeepExif
                           ? 'Keep EXIF metadata (camera info, orientation, etc.)'
-                          : `EXIF not supported by ${encoder?.meta.label || 'this format'}`
+                          : hasSourceExif
+                            ? `EXIF not supported by ${encoder?.meta.label || 'this format'}`
+                            : 'Source image has no EXIF metadata'
                       }
                     >
                       Keep EXIF
                     </span>
                     <Checkbox
                       name="keepExif"
-                      checked={metadataOptions.keepExif && metadataSupport.supportsExif}
-                      disabled={!metadataSupport.supportsExif}
+                      checked={canKeepExif && metadataOptions.keepExif}
+                      disabled={!canKeepExif}
                       onChange={this.onMetadataOptionChange}
                     />
                   </div>
                   <div class={style.optionToggle}>
                     <span
                       title={
-                        metadataSupport.supportsIcc
+                        canKeepIcc
                           ? 'Keep ICC color profile'
-                          : `ICC profile not supported by ${encoder?.meta.label || 'this format'}`
+                          : hasSourceIcc
+                            ? `ICC profile not supported by ${encoder?.meta.label || 'this format'}`
+                            : 'Source image has no ICC color profile'
                       }
                     >
                       Keep ICC Profile
                     </span>
                     <Checkbox
                       name="keepIcc"
-                      checked={metadataOptions.keepIcc && metadataSupport.supportsIcc}
-                      disabled={!metadataSupport.supportsIcc}
+                      checked={canKeepIcc && metadataOptions.keepIcc}
+                      disabled={!canKeepIcc}
                       onChange={this.onMetadataOptionChange}
                     />
                   </div>
                   <div class={style.optionToggle}>
                     <span
                       title={
-                        metadataSupport.supportsXmp
+                        canKeepXmp
                           ? 'Keep XMP metadata (extended metadata)'
-                          : `XMP not supported by ${encoder?.meta.label || 'this format'}`
+                          : hasSourceXmp
+                            ? `XMP not supported by ${encoder?.meta.label || 'this format'}`
+                            : 'Source image has no XMP metadata'
                       }
                     >
                       Keep XMP
                     </span>
                     <Checkbox
                       name="keepXmp"
-                      checked={metadataOptions.keepXmp && metadataSupport.supportsXmp}
-                      disabled={!metadataSupport.supportsXmp}
+                      checked={canKeepXmp && metadataOptions.keepXmp}
+                      disabled={!canKeepXmp}
                       onChange={this.onMetadataOptionChange}
                     />
                   </div>
-                  {!(metadataSupport.supportsExif && metadataSupport.supportsIcc && metadataSupport.supportsXmp) ? (
+                  {!(canKeepExif && canKeepIcc && canKeepXmp) ? (
                     <div class={style.optionOneCell} style={{ paddingTop: 0, color: '#888', fontSize: '0.85em' }}>
-                      Note: {encoder?.meta.label || 'This format'} does not support some metadata types.
+                      Note: 
+                      {!(metadataSupport.supportsExif && metadataSupport.supportsIcc && metadataSupport.supportsXmp) 
+                        ? `${encoder?.meta.label || 'This format'} does not support some metadata types. `
+                        : ''}
+                      {!(hasSourceExif && hasSourceIcc && hasSourceXmp) 
+                        ? 'Source image does not have all metadata types. '
+                        : ''}
                       Disabled options will be ignored during compression.
                     </div>
                   ) : null}

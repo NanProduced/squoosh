@@ -9,6 +9,12 @@ export interface ImageMetadata {
   xmp?: ArrayBuffer;
 }
 
+export interface MetadataPresence {
+  hasExif: boolean;
+  hasIcc: boolean;
+  hasXmp: boolean;
+}
+
 export interface MetadataInfo {
   type: 'exif' | 'icc' | 'xmp';
   size: number;

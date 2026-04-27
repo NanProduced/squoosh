@@ -17,7 +17,11 @@ export default class Checkbox extends Component<Props, State> {
             <CheckedIcon class={`${style.icon} ${style.checked}`} />
           )
         ) : (
-          <UncheckedIcon class={style.icon} />
+          props.disabled ? (
+            <UncheckedIcon class={`${style.icon} ${style.disabled}`} />
+          ) : (
+            <UncheckedIcon class={style.icon} />
+          )
         )}
         {/* @ts-ignore - TS bug https://github.com/microsoft/TypeScript/issues/16019 */}
         <input class={style.realCheckbox} type="checkbox" {...props} />
