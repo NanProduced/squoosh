@@ -1051,10 +1051,14 @@ export default class Compress extends Component<Props, State> {
           </svg>
         </button>
         <button class={style.presetButton} onClick={this.onTogglePresetDrawer}>
-          <svg viewBox="0 0 24 24" fill="currentColor">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <title>Presets</title>
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
+            <rect x="3" y="3" width="7" height="7" rx="1" />
+            <rect x="14" y="3" width="7" height="7" rx="1" />
+            <rect x="14" y="14" width="7" height="7" rx="1" />
+            <rect x="3" y="14" width="7" height="7" rx="1" />
           </svg>
+          <span>Presets</span>
         </button>
         {mobileView ? (
           <div class={style.options}>

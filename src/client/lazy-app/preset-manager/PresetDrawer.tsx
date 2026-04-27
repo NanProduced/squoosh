@@ -10,6 +10,9 @@ import {
   createPresetFromSideSettings,
   PresetData,
   deserializePresetFromUrl,
+  getPresetSummary,
+  getEncoderColor,
+  PresetSummary,
 } from 'client/lazy-app/preset-manager';
 import { SaveIcon } from 'client/lazy-app/icons';
 import type SnackBarElement from 'shared/custom-els/snack-bar';
@@ -39,6 +42,152 @@ interface State {
   loading: boolean;
   activePresetId: string | null;
   showConfirmDelete: string | null;
+}
+
+function PresetCard({
+  preset,
+  summary,
+  isActive,
+  isBuiltIn,
+  showConfirmDelete,
+  onApplyLeft,
+  onApplyRight,
+  onApplyBoth,
+  onEdit,
+  onExport,
+  onDelete,
+  onConfirmDelete,
+  onCancelDelete,
+}: {
+  preset: Preset;
+  summary: PresetSummary;
+  isActive: boolean;
+  isBuiltIn: boolean;
+  showConfirmDelete: boolean;
+  onApplyLeft: () => void;
+  onApplyRight: () => void;
+  onApplyBoth: () => void;
+  onEdit?: () => void;
+  onExport: () => void;
+  onDelete?: () => void;
+  onConfirmDelete?: () => void;
+  onCancelDelete?: () => void;
+}) {
+  const formatColor = getEncoderColor(preset.data.encoderState?.type);
+
+  return (
+    <div
+      class={`${style.presetCard} ${isActive ? style.presetCardActive : ''}`}
+    >
+      {showConfirmDelete ? (
+        <div class={style.presetCardDeleteConfirm}>
+          <span class={style.deleteConfirmText}>
+            Delete "{preset.name}"?
+          </span>
+          <div class={style.deleteConfirmButtons}>
+            <button
+              class={style.deleteConfirmNo}
+              onClick={onCancelDelete}
+            >
+              Cancel
+            </button>
+            <button
+              class={style.deleteConfirmYes}
+              onClick={onConfirmDelete}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <div class={style.presetCardHeader}>
+            <div
+              class={style.formatIcon}
+              style={{ background: formatColor }}
+            >
+              <span class={style.formatShort}>{summary.formatShort.slice(0, 3)}</span>
+            </div>
+            <div class={style.presetCardInfo}>
+              <span class={style.presetCardName}>{preset.name}</span>
+              <div class={style.presetCardMeta}>
+                <span class={style.formatLabel}>{summary.formatLabel}</span>
+                {summary.quality !== null && (
+                  <span class={style.qualityBadge}>
+                    Q{summary.quality}
+                  </span>
+                )}
+                {summary.isResized && (
+                  <span class={style.resizeBadge}>
+                    {summary.resizeWidth}×{summary.resizeHeight}
+                  </span>
+                )}
+                {summary.isQuantized && (
+                  <span class={style.quantizeBadge}>Palette</span>
+                )}
+              </div>
+            </div>
+            {isBuiltIn && (
+              <span class={style.builtInBadge}>Built-in</span>
+            )}
+          </div>
+          <div class={style.presetCardActions}>
+            <button
+              class={`${style.applyButton} ${style.applyLeft}`}
+              onClick={onApplyLeft}
+              title="Apply to left side"
+            >
+              <span class={style.applyButtonText}>Left</span>
+              <span class={style.applyButtonIcon}>◀</span>
+            </button>
+            <button
+              class={`${style.applyButton} ${style.applyBoth}`}
+              onClick={onApplyBoth}
+              title="Apply to both sides"
+            >
+              <span class={style.applyButtonText}>Both</span>
+              <span class={style.applyButtonIcon}>◀▶</span>
+            </button>
+            <button
+              class={`${style.applyButton} ${style.applyRight}`}
+              onClick={onApplyRight}
+              title="Apply to right side"
+            >
+              <span class={style.applyButtonText}>Right</span>
+              <span class={style.applyButtonIcon}>▶</span>
+            </button>
+            <div class={style.moreActions}>
+              <button
+                class={style.actionIconButton}
+                onClick={onExport}
+                title="Copy share link"
+              >
+                🔗
+              </button>
+              {!isBuiltIn && onEdit && (
+                <button
+                  class={style.actionIconButton}
+                  onClick={onEdit}
+                  title="Edit preset"
+                >
+                  ✏️
+                </button>
+              )}
+              {!isBuiltIn && onDelete && (
+                <button
+                  class={style.actionIconButton}
+                  onClick={onDelete}
+                  title="Delete preset"
+                >
+                  🗑️
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default class PresetDrawer extends Component<Props, State> {
@@ -83,7 +232,7 @@ export default class PresetDrawer extends Component<Props, State> {
 
         this.setState({ activePresetId: 'url-imported' });
         this.props.showSnack('Preset imported from URL', {
-          timeout: 3000,
+          timeout: 4000,
           actions: ['Apply to Both', 'Apply Left', 'Apply Right', 'dismiss'],
         }).then((action) => {
           if (action === 'Apply to Both') {
@@ -117,7 +266,8 @@ export default class PresetDrawer extends Component<Props, State> {
   private handleApplyPreset = (preset: Preset, side: 'left' | 'right' | 'both') => {
     this.props.onApplyPreset(preset, side);
     this.setState({ activePresetId: preset.id });
-    this.props.showSnack(`Preset "${preset.name}" applied to ${side === 'both' ? 'both sides' : side}`, {
+    const sideText = side === 'both' ? 'both sides' : side === 'left' ? 'left side' : 'right side';
+    this.props.showSnack(`Applied "${preset.name}" to ${sideText}`, {
       timeout: 2000,
       actions: ['dismiss'],
     });
@@ -186,7 +336,7 @@ export default class PresetDrawer extends Component<Props, State> {
       });
 
       this.props.showSnack(
-        editingPreset ? 'Preset updated' : 'Preset saved',
+        editingPreset ? 'Preset updated successfully' : 'Preset saved successfully',
         { timeout: 2000, actions: ['dismiss'] },
       );
     } catch (e) {
@@ -271,7 +421,20 @@ export default class PresetDrawer extends Component<Props, State> {
       >
         <div class={`${style.drawer} ${isOpen ? style.open : ''}`}>
           <div class={style.header}>
-            <h2 class={style.title}>Presets</h2>
+            <div class={style.headerContent}>
+              <div class={style.headerIcon}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="7" height="7" rx="1" />
+                  <rect x="14" y="3" width="7" height="7" rx="1" />
+                  <rect x="14" y="14" width="7" height="7" rx="1" />
+                  <rect x="3" y="14" width="7" height="7" rx="1" />
+                </svg>
+              </div>
+              <div>
+                <h2 class={style.title}>Presets</h2>
+                <p class={style.subtitle}>Quick settings for your images</p>
+              </div>
+            </div>
             <button class={style.closeButton} onClick={this.props.onClose}>
               <svg viewBox="0 0 24 24" fill="currentColor">
                 <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
@@ -288,40 +451,63 @@ export default class PresetDrawer extends Component<Props, State> {
               <div>
                 {isEditing ? (
                   <div class={style.editSection}>
-                    <h3 class={style.sectionTitle}>
-                      {editingPreset ? 'Edit Preset' : 'Save Preset'}
-                    </h3>
-                    <input
-                      type="text"
-                      class={style.nameInput}
-                      placeholder="Preset name"
-                      value={newPresetName}
-                      onInput={(e) =>
-                        this.setState({ newPresetName: (e.target as HTMLInputElement).value })
-                      }
-                    />
+                    <div class={style.editHeader}>
+                      <h3 class={style.editTitle}>
+                        {editingPreset ? 'Edit Preset' : 'Create New Preset'}
+                      </h3>
+                      <p class={style.editSubtitle}>
+                        Save your current settings as a preset
+                      </p>
+                    </div>
+                    <div class={style.formGroup}>
+                      <label class={style.formLabel}>Preset Name</label>
+                      <input
+                        type="text"
+                        class={style.nameInput}
+                        placeholder="e.g., Social Media Post"
+                        value={newPresetName}
+                        onInput={(e) =>
+                          this.setState({ newPresetName: (e.target as HTMLInputElement).value })
+                        }
+                      />
+                    </div>
                     {!editingPreset && (
-                      <div class={style.sideSelector}>
-                        <label class={style.radioLabel}>
-                          <input
-                            type="radio"
-                            name="saveSide"
-                            value="left"
-                            checked={saveSide === 'left'}
-                            onChange={() => this.setState({ saveSide: 'left' })}
-                          />
-                          <span>Use Left Side Settings</span>
-                        </label>
-                        <label class={style.radioLabel}>
-                          <input
-                            type="radio"
-                            name="saveSide"
-                            value="right"
-                            checked={saveSide === 'right'}
-                            onChange={() => this.setState({ saveSide: 'right' })}
-                          />
-                          <span>Use Right Side Settings</span>
-                        </label>
+                      <div class={style.formGroup}>
+                        <label class={style.formLabel}>Use Settings From</label>
+                        <div class={style.sideSelector}>
+                          <label
+                            class={`${style.optionCard} ${
+                              saveSide === 'left' ? style.optionCardActive : ''
+                            }`}
+                          >
+                            <input
+                              type="radio"
+                              name="saveSide"
+                              value="left"
+                              checked={saveSide === 'left'}
+                              onChange={() => this.setState({ saveSide: 'left' })}
+                              class={style.optionCardRadio}
+                            />
+                            <span class={style.optionCardIcon}>◀</span>
+                            <span class={style.optionCardLabel}>Left Side</span>
+                          </label>
+                          <label
+                            class={`${style.optionCard} ${
+                              saveSide === 'right' ? style.optionCardActive : ''
+                            }`}
+                          >
+                            <input
+                              type="radio"
+                              name="saveSide"
+                              value="right"
+                              checked={saveSide === 'right'}
+                              onChange={() => this.setState({ saveSide: 'right' })}
+                              class={style.optionCardRadio}
+                            />
+                            <span class={style.optionCardIcon}>▶</span>
+                            <span class={style.optionCardLabel}>Right Side</span>
+                          </label>
+                        </div>
                       </div>
                     )}
                     <div class={style.editActions}>
@@ -329,7 +515,7 @@ export default class PresetDrawer extends Component<Props, State> {
                         Cancel
                       </button>
                       <button class={style.saveButton} onClick={this.handleSavePreset}>
-                        {editingPreset ? 'Update' : 'Save'}
+                        {editingPreset ? 'Update Preset' : 'Save Preset'}
                       </button>
                     </div>
                   </div>
@@ -340,47 +526,18 @@ export default class PresetDrawer extends Component<Props, State> {
                         <h3 class={style.sectionTitle}>Built-in Presets</h3>
                         <div class={style.presetList}>
                           {builtInPresets.map((preset) => (
-                            <div
-                              class={`${style.presetItem} ${
-                                activePresetId === preset.id ? style.active : ''
-                              }`}
+                            <PresetCard
                               key={preset.id}
-                            >
-                              <div class={style.presetInfo}>
-                                <span class={style.presetName}>{preset.name}</span>
-                                <span class={style.presetBadge}>Built-in</span>
-                              </div>
-                              <div class={style.presetActions}>
-                                <button
-                                  class={style.actionButton}
-                                  title="Apply to left"
-                                  onClick={() => this.handleApplyPreset(preset, 'left')}
-                                >
-                                  ←
-                                </button>
-                                <button
-                                  class={style.actionButton}
-                                  title="Apply to both"
-                                  onClick={() => this.handleApplyPreset(preset, 'both')}
-                                >
-                                  ↔
-                                </button>
-                                <button
-                                  class={style.actionButton}
-                                  title="Apply to right"
-                                  onClick={() => this.handleApplyPreset(preset, 'right')}
-                                >
-                                  →
-                                </button>
-                                <button
-                                  class={style.actionButton}
-                                  title="Export link"
-                                  onClick={() => this.handleExportPreset(preset)}
-                                >
-                                  🔗
-                                </button>
-                              </div>
-                            </div>
+                              preset={preset}
+                              summary={getPresetSummary(preset.data)}
+                              isActive={activePresetId === preset.id}
+                              isBuiltIn={true}
+                              showConfirmDelete={false}
+                              onApplyLeft={() => this.handleApplyPreset(preset, 'left')}
+                              onApplyRight={() => this.handleApplyPreset(preset, 'right')}
+                              onApplyBoth={() => this.handleApplyPreset(preset, 'both')}
+                              onExport={() => this.handleExportPreset(preset)}
+                            />
                           ))}
                         </div>
                       </div>
@@ -392,101 +549,42 @@ export default class PresetDrawer extends Component<Props, State> {
                         <button
                           class={style.addPresetButton}
                           onClick={this.handleStartSave}
-                          title="Save current settings"
                         >
                           <SaveIcon />
+                          <span>New Preset</span>
                         </button>
                       </div>
                       <div class={style.presetList}>
                         {customPresets.length === 0 ? (
                           <div class={style.emptyState}>
-                            <p>No custom presets yet.</p>
-                            <p>
-                              Click the{' '}
-                              <SaveIcon />{' '}
-                              button to save your current settings.
+                            <div class={style.emptyStateIcon}>
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                            </div>
+                            <p class={style.emptyStateTitle}>No custom presets yet</p>
+                            <p class={style.emptyStateText}>
+                              Click "New Preset" to save your current settings
                             </p>
                           </div>
                         ) : (
                           customPresets.map((preset) => (
-                            <div
-                              class={`${style.presetItem} ${
-                                activePresetId === preset.id ? style.active : ''
-                              }`}
+                            <PresetCard
                               key={preset.id}
-                            >
-                              {showConfirmDelete === preset.id ? (
-                                <div class={style.confirmDelete}>
-                                  <span class={style.confirmText}>Delete "{preset.name}"?</span>
-                                  <div class={style.confirmActions}>
-                                    <button
-                                      class={style.confirmNo}
-                                      onClick={() => this.setState({ showConfirmDelete: null })}
-                                    >
-                                      No
-                                    </button>
-                                    <button
-                                      class={style.confirmYes}
-                                      onClick={() => this.handleDeletePreset(preset.id)}
-                                    >
-                                      Yes
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div>
-                                  <div class={style.presetInfo}>
-                                    <span class={style.presetName}>{preset.name}</span>
-                                  </div>
-                                  <div class={style.presetActions}>
-                                    <button
-                                      class={style.actionButton}
-                                      title="Apply to left"
-                                      onClick={() => this.handleApplyPreset(preset, 'left')}
-                                    >
-                                      ←
-                                    </button>
-                                    <button
-                                      class={style.actionButton}
-                                      title="Apply to both"
-                                      onClick={() => this.handleApplyPreset(preset, 'both')}
-                                    >
-                                      ↔
-                                    </button>
-                                    <button
-                                      class={style.actionButton}
-                                      title="Apply to right"
-                                      onClick={() => this.handleApplyPreset(preset, 'right')}
-                                    >
-                                      →
-                                    </button>
-                                    <button
-                                      class={style.actionButton}
-                                      title="Edit"
-                                      onClick={() => this.handleStartEdit(preset)}
-                                    >
-                                      ✏️
-                                    </button>
-                                    <button
-                                      class={style.actionButton}
-                                      title="Export link"
-                                      onClick={() => this.handleExportPreset(preset)}
-                                    >
-                                      🔗
-                                    </button>
-                                    <button
-                                      class={style.actionButton}
-                                      title="Delete"
-                                      onClick={() =>
-                                        this.setState({ showConfirmDelete: preset.id })
-                                      }
-                                    >
-                                      🗑️
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
+                              preset={preset}
+                              summary={getPresetSummary(preset.data)}
+                              isActive={activePresetId === preset.id}
+                              isBuiltIn={false}
+                              showConfirmDelete={showConfirmDelete === preset.id}
+                              onApplyLeft={() => this.handleApplyPreset(preset, 'left')}
+                              onApplyRight={() => this.handleApplyPreset(preset, 'right')}
+                              onApplyBoth={() => this.handleApplyPreset(preset, 'both')}
+                              onEdit={() => this.handleStartEdit(preset)}
+                              onExport={() => this.handleExportPreset(preset)}
+                              onDelete={() => this.setState({ showConfirmDelete: preset.id })}
+                              onConfirmDelete={() => this.handleDeletePreset(preset.id)}
+                              onCancelDelete={() => this.setState({ showConfirmDelete: null })}
+                            />
                           ))
                         )}
                       </div>

@@ -4,12 +4,12 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.6);
   z-index: 1000;
   opacity: 0;
   visibility: hidden;
-  transition: opacity 0.3s ease, visibility 0.3s ease;
-  backdrop-filter: blur(2px);
+  transition: opacity 0.25s ease, visibility 0.25s ease;
+  backdrop-filter: blur(4px);
 }
 
 .overlay.open {
@@ -21,16 +21,16 @@
   position: absolute;
   top: 0;
   right: 0;
-  width: 360px;
+  width: 380px;
   max-width: 100%;
   height: 100%;
-  background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+  background: linear-gradient(180deg, #1a1a2e 0%, #16213e 50%, #0f0f23 100%);
   color: #fff;
   transform: translateX(100%);
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex;
   flex-direction: column;
-  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.3);
+  box-shadow: -8px 0 40px rgba(0, 0, 0, 0.4);
 }
 
 .drawer.open {
@@ -39,45 +39,76 @@
 
 .header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  padding: 20px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.02);
 }
 
+.headerContent {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.headerIcon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--hot-pink), var(--pink));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.headerIcon svg {
+  width: 24px;
+  height: 24px;
+  stroke: #fff;
+}
+
 .title {
-  font-size: 1.3rem;
-  font-weight: 600;
+  font-size: 1.25rem;
+  font-weight: 700;
   margin: 0;
   color: #fff;
+  line-height: 1.3;
+}
+
+.subtitle {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.5);
+  margin: 2px 0 0 0;
 }
 
 .closeButton {
-  background: none;
+  background: rgba(255, 255, 255, 0.08);
   border: none;
   color: #fff;
   cursor: pointer;
-  padding: 8px;
-  margin: -8px;
-  border-radius: 50%;
+  padding: 10px;
+  margin: -4px;
+  border-radius: 10px;
   transition: background 0.2s ease, transform 0.2s ease;
+  flex-shrink: 0;
+}
 
-  &:hover {
-    background: rgba(255, 255, 255, 0.1);
-    transform: rotate(90deg);
-  }
+.closeButton:hover {
+  background: rgba(255, 255, 255, 0.15);
+  transform: rotate(90deg);
+}
 
-  &:focus {
-    outline: 2px solid var(--hot-pink);
-    outline-offset: 2px;
-  }
+.closeButton:focus {
+  outline: 2px solid var(--hot-pink);
+  outline-offset: 2px;
+}
 
-  & > svg {
-    width: 24px;
-    height: 24px;
-    display: block;
-  }
+.closeButton > svg {
+  width: 20px;
+  height: 20px;
+  display: block;
 }
 
 .content {
@@ -86,30 +117,34 @@
   padding: 16px;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
 
-  &::-webkit-scrollbar {
-    width: 6px;
-  }
+.content::-webkit-scrollbar {
+  width: 6px;
+}
 
-  &::-webkit-scrollbar-track {
-    background: transparent;
-  }
+.content::-webkit-scrollbar-track {
+  background: transparent;
+}
 
-  &::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 3px;
-  }
+.content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
 }
 
 .loading {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 40px;
+  padding: 60px 20px;
 }
 
 .presetSection {
   margin-bottom: 24px;
+}
+
+.presetSection:last-child {
+  margin-bottom: 0;
 }
 
 .sectionHeader {
@@ -120,328 +155,538 @@
 }
 
 .sectionTitle {
-  font-size: 0.85rem;
-  font-weight: 600;
+  font-size: 0.75rem;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: rgba(255, 255, 255, 0.6);
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.45);
   margin: 0 0 12px 0;
 }
 
 .addPresetButton {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   background: linear-gradient(135deg, var(--hot-pink), var(--pink));
   border: none;
   color: #fff;
   cursor: pointer;
-  padding: 8px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
 
-  &:hover {
-    transform: scale(1.05);
-    box-shadow: 0 4px 12px rgba(255, 107, 157, 0.4);
-  }
+.addPresetButton:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(255, 107, 157, 0.4);
+}
 
-  &:focus {
-    outline: 2px solid var(--hot-pink);
-    outline-offset: 2px;
-  }
+.addPresetButton:active {
+  transform: translateY(0);
+}
 
-  & > svg {
-    width: 20px;
-    height: 20px;
-  }
+.addPresetButton:focus {
+  outline: 2px solid var(--hot-pink);
+  outline-offset: 2px;
+}
+
+.addPresetButton > svg {
+  width: 16px;
+  height: 16px;
 }
 
 .presetList {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
-.presetItem {
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 12px;
-  padding: 12px;
+.presetCard {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 14px;
+  padding: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
-
-  &:hover {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.15);
-  }
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
 }
 
-.presetItem.active {
+.presetCard:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.presetCardActive {
   background: linear-gradient(
     135deg,
-    rgba(255, 107, 157, 0.15),
-    rgba(255, 65, 108, 0.1)
+    rgba(255, 107, 157, 0.12),
+    rgba(255, 65, 108, 0.06)
   );
   border-color: var(--hot-pink);
 }
 
-.presetInfo {
+.presetCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.formatIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.formatIcon::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.2) 0%, transparent 50%);
+}
+
+.formatShort {
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+  position: relative;
+  z-index: 1;
+}
+
+.presetCardInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.presetCardName {
+  display: block;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #fff;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.presetCardMeta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.formatLabel {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.qualityBadge,
+.resizeBadge,
+.quantizeBadge {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.qualityBadge {
+  background: rgba(255, 193, 7, 0.15);
+  color: #ffc107;
+}
+
+.resizeBadge {
+  background: rgba(33, 150, 243, 0.15);
+  color: #2196f3;
+}
+
+.quantizeBadge {
+  background: rgba(156, 39, 176, 0.15);
+  color: #9c27b0;
+}
+
+.builtInBadge {
+  font-size: 0.65rem;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.presetCardActions {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
 }
 
-.presetName {
-  font-weight: 500;
-  font-size: 1rem;
-  flex: 1;
-}
-
-.presetBadge {
-  font-size: 0.7rem;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.1);
-  color: rgba(255, 255, 255, 0.6);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.presetActions {
+.applyButton {
   display: flex;
+  align-items: center;
   gap: 4px;
-  flex-wrap: wrap;
-}
-
-.actionButton {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.08);
   border: none;
-  color: #fff;
+  color: rgba(255, 255, 255, 0.8);
   cursor: pointer;
   padding: 6px 10px;
-  border-radius: 6px;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: all 0.15s ease;
+}
+
+.applyButton:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.applyButton:active {
+  transform: translateY(0);
+}
+
+.applyButton:focus {
+  outline: 2px solid var(--hot-pink);
+  outline-offset: 2px;
+}
+
+.applyButtonText {
+  opacity: 0.9;
+}
+
+.applyButtonIcon {
   font-size: 0.85rem;
+  opacity: 0.7;
+}
+
+.applyLeft:hover {
+  background: rgba(33, 150, 243, 0.2);
+  color: #2196f3;
+}
+
+.applyBoth:hover {
+  background: rgba(76, 175, 80, 0.2);
+  color: #4caf50;
+}
+
+.applyRight:hover {
+  background: rgba(255, 152, 0, 0.2);
+  color: #ff9800;
+}
+
+.moreActions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.actionIconButton {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  transition: all 0.15s ease;
+}
+
+.actionIconButton:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.actionIconButton:focus {
+  outline: 2px solid var(--hot-pink);
+  outline-offset: 2px;
+}
+
+.presetCardDeleteConfirm {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+}
+
+.deleteConfirmText {
+  font-size: 0.9rem;
+  color: #ff6b6b;
   font-weight: 500;
-  transition: background 0.2s ease, transform 0.1s ease;
-  min-width: 36px;
-  text-align: center;
+}
 
-  &:hover {
-    background: rgba(255, 255, 255, 0.2);
-    transform: translateY(-1px);
-  }
+.deleteConfirmButtons {
+  display: flex;
+  gap: 8px;
+}
 
-  &:active {
-    transform: translateY(0);
-  }
+.deleteConfirmNo,
+.deleteConfirmYes {
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s ease;
+}
 
-  &:focus {
-    outline: 2px solid var(--hot-pink);
-    outline-offset: 2px;
-  }
+.deleteConfirmNo {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.deleteConfirmNo:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.deleteConfirmYes {
+  background: linear-gradient(135deg, #ff5252, #f44336);
+  color: #fff;
+}
+
+.deleteConfirmYes:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(244, 67, 54, 0.4);
 }
 
 .emptyState {
   text-align: center;
-  padding: 32px 16px;
-  color: rgba(255, 255, 255, 0.5);
-  font-size: 0.9rem;
+  padding: 32px 20px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 14px;
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+}
 
-  & > p {
-    margin: 0 0 8px 0;
+.emptyStateIcon {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 12px;
+  color: rgba(255, 255, 255, 0.2);
+}
 
-    &:last-child {
-      margin-bottom: 0;
-    }
-  }
+.emptyStateIcon svg {
+  width: 100%;
+  height: 100%;
+}
 
-  & svg {
-    width: 16px;
-    height: 16px;
-    vertical-align: middle;
-    display: inline;
-  }
+.emptyStateTitle {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.6);
+  margin: 0 0 4px 0;
+}
+
+.emptyStateText {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.4);
+  margin: 0;
 }
 
 .editSection {
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 12px;
-  padding: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 16px;
+  padding: 20px;
   border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.editHeader {
+  margin-bottom: 20px;
+}
+
+.editTitle {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin: 0 0 4px 0;
+  color: #fff;
+}
+
+.editSubtitle {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.5);
+  margin: 0;
+}
+
+.formGroup {
+  margin-bottom: 16px;
+}
+
+.formLabel {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .nameInput {
   width: 100%;
-  padding: 12px 16px;
-  border: 2px solid rgba(255, 255, 255, 0.15);
-  border-radius: 8px;
+  padding: 14px 16px;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
   background: rgba(0, 0, 0, 0.2);
   color: #fff;
-  font-size: 1rem;
+  font-size: 0.95rem;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  box-sizing: border-box;
+}
 
-  &::placeholder {
-    color: rgba(255, 255, 255, 0.4);
-  }
+.nameInput::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
 
-  &:focus {
-    outline: none;
-    border-color: var(--hot-pink);
-    box-shadow: 0 0 0 3px rgba(255, 107, 157, 0.2);
-  }
+.nameInput:focus {
+  outline: none;
+  border-color: var(--hot-pink);
+  box-shadow: 0 0 0 3px rgba(255, 107, 157, 0.15);
 }
 
 .sideSelector {
-  margin-top: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
 
-.radioLabel {
+.optionCard {
   display: flex;
+  flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
+  padding: 16px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 2px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
   cursor: pointer;
-  transition: background 0.2s ease;
+  transition: all 0.2s ease;
+  position: relative;
+}
 
-  &:hover {
-    background: rgba(255, 255, 255, 0.1);
-  }
+.optionCard:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+}
 
-  & > input {
-    width: 18px;
-    height: 18px;
-    accent-color: var(--hot-pink);
-  }
+.optionCardActive {
+  background: rgba(255, 107, 157, 0.1);
+  border-color: var(--hot-pink);
+}
 
-  & > span {
-    font-size: 0.95rem;
-  }
+.optionCardRadio {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.optionCardIcon {
+  font-size: 1.2rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.optionCardActive .optionCardIcon {
+  color: var(--hot-pink);
+}
+
+.optionCardLabel {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.optionCardActive .optionCardLabel {
+  color: #fff;
 }
 
 .editActions {
   display: flex;
   gap: 12px;
-  margin-top: 16px;
+  margin-top: 20px;
 }
 
 .cancelButton {
   flex: 1;
-  padding: 12px;
-  border: 2px solid rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
+  padding: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
   background: transparent;
-  color: #fff;
+  color: rgba(255, 255, 255, 0.8);
   font-size: 0.95rem;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease;
+  transition: all 0.2s ease;
+}
 
-  &:hover {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: rgba(255, 255, 255, 0.3);
-  }
+.cancelButton:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
 
-  &:focus {
-    outline: 2px solid var(--hot-pink);
-    outline-offset: 2px;
-  }
+.cancelButton:focus {
+  outline: 2px solid var(--hot-pink);
+  outline-offset: 2px;
 }
 
 .saveButton {
   flex: 1;
-  padding: 12px;
+  padding: 14px;
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
   background: linear-gradient(135deg, var(--hot-pink), var(--pink));
   color: #fff;
   font-size: 0.95rem;
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-
-  &:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(255, 107, 157, 0.4);
-  }
-
-  &:active {
-    transform: translateY(0);
-  }
-
-  &:focus {
-    outline: 2px solid var(--hot-pink);
-    outline-offset: 2px;
-  }
+  transition: all 0.2s ease;
 }
 
-.confirmDelete {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.saveButton:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(255, 107, 157, 0.4);
 }
 
-.confirmText {
-  font-size: 0.95rem;
-  color: #ff6b6b;
+.saveButton:active {
+  transform: translateY(0);
 }
 
-.confirmActions {
-  display: flex;
-  gap: 8px;
+.saveButton:focus {
+  outline: 2px solid var(--hot-pink);
+  outline-offset: 2px;
 }
 
-.confirmNo,
-.confirmYes {
-  padding: 6px 16px;
-  border-radius: 6px;
-  font-size: 0.85rem;
-  font-weight: 500;
-  cursor: pointer;
-  border: none;
-  transition: transform 0.1s ease;
-
-  &:hover {
-    transform: translateY(-1px);
-  }
-
-  &:focus {
-    outline: 2px solid var(--hot-pink);
-    outline-offset: 2px;
-  }
-}
-
-.confirmNo {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
-}
-
-.confirmYes {
-  background: #ff6b6b;
-  color: #fff;
-}
-
-@keyframes slideIn {
+@keyframes slideInUp {
   from {
     opacity: 0;
-    transform: translateX(20px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
-    transform: translateX(0);
+    transform: translateY(0);
   }
 }
 
-.presetItem {
-  animation: slideIn 0.3s ease forwards;
-
-  &:nth-child(1) { animation-delay: 0.05s; }
-  &:nth-child(2) { animation-delay: 0.1s; }
-  &:nth-child(3) { animation-delay: 0.15s; }
-  &:nth-child(4) { animation-delay: 0.2s; }
-  &:nth-child(5) { animation-delay: 0.25s; }
+.presetCard {
+  animation: slideInUp 0.3s ease forwards;
+  opacity: 0;
 }
+
+.presetCard:nth-child(1) { animation-delay: 0.03s; }
+.presetCard:nth-child(2) { animation-delay: 0.06s; }
+.presetCard:nth-child(3) { animation-delay: 0.09s; }
+.presetCard:nth-child(4) { animation-delay: 0.12s; }
+.presetCard:nth-child(5) { animation-delay: 0.15s; }
