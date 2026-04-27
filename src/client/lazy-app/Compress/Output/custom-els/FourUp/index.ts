@@ -28,6 +28,8 @@ export default class FourUp extends HTMLElement {
   private _everConnected = false;
   private _resizeObserver?: ResizeObserver;
   private _activeHandle?: 'horizontal' | 'vertical' | 'center';
+  private _mutationObserver?: MutationObserver;
+  private _isUpdatingHandles = false;
 
   constructor() {
     super();
@@ -35,9 +37,8 @@ export default class FourUp extends HTMLElement {
     this._verticalHandle.className = styles.fourUpVerticalHandle;
     this._centerHandle.className = styles.fourUpCenterHandle;
 
-    new MutationObserver(() => this._childrenChange()).observe(this, {
-      childList: true,
-    });
+    this._mutationObserver = new MutationObserver(() => this._childrenChange());
+    this._mutationObserver.observe(this, { childList: true });
 
     this._setupPointerTracking();
   }
@@ -215,11 +216,41 @@ export default class FourUp extends HTMLElement {
   }
 
   private _childrenChange() {
+    if (this._isUpdatingHandles) return;
+
     const handles = [this._horizontalHandle, this._verticalHandle, this._centerHandle];
-    for (const handle of handles) {
-      if (this.lastElementChild !== handle) {
-        this.appendChild(handle);
+    const children = Array.from(this.children);
+    
+    const lastThreeChildren = children.slice(-3);
+    const handlesAreLastThree = 
+      lastThreeChildren.length === 3 &&
+      handles.every((h, i) => lastThreeChildren[i] === h);
+
+    if (handlesAreLastThree) {
+      return;
+    }
+
+    this._isUpdatingHandles = true;
+    try {
+      for (const handle of handles) {
+        if (!children.includes(handle)) {
+          this.appendChild(handle);
+        }
       }
+      
+      const currentChildren = Array.from(this.children);
+      const currentHandleIndices = handles.map(h => currentChildren.indexOf(h));
+      const needsReorder = !currentHandleIndices.every((idx, i) => 
+        i === 0 || idx > currentHandleIndices[i - 1]
+      );
+
+      if (needsReorder) {
+        for (const handle of handles) {
+          this.appendChild(handle);
+        }
+      }
+    } finally {
+      this._isUpdatingHandles = false;
     }
   }
 
