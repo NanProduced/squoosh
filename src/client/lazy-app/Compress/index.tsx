@@ -763,8 +763,11 @@ export default class Compress extends Component<Props, State> {
           decoded = drawableToImageData(vectorImage);
         } else {
           sourceMimeType = await abortable(mainSignal, sniffMimeType(mainJobState.file));
-          const sourceBuffer = await abortable(mainSignal, blobToArrayBuffer(mainJobState.file));
-          sourceMetadata = parseMetadataFromBuffer(sourceBuffer, sourceMimeType);
+          const headerBuffer = await abortable(
+            mainSignal,
+            blobToArrayBuffer(mainJobState.file.slice(0, 1024 * 1024)),
+          );
+          sourceMetadata = parseMetadataFromBuffer(headerBuffer, sourceMimeType);
           
           decoded = await decodeImage(
             mainSignal,
