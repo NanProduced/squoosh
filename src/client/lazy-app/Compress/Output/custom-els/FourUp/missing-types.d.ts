@@ -1,6 +1,13 @@
-export default class FourUp extends HTMLElement {
-  static get observedAttributes(): string[];
-
-  get legacyClipCompat(): boolean;
-  set legacyClipCompat(val: boolean);
+interface FourUpAttributes extends preact.JSX.HTMLAttributes {
+  'legacy-clip-compat'?: boolean;
 }
+
+declare module 'preact' {
+  namespace createElement.JSX {
+    interface IntrinsicElements {
+      'four-up': FourUpAttributes;
+    }
+  }
+}
+
+export {};

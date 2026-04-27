@@ -75,7 +75,8 @@ export default class Output extends Component<Props, State> {
   retargetedEvents = new WeakSet<Event>();
 
   componentDidMount() {
-    for (let i = 0; i < 4; i++) {
+    const quadrantIndices: QuadrantIndex[] = [0, 1, 2, 3];
+    for (const i of quadrantIndices) {
       const drawable = this.drawable(i);
       if (this.canvases[i] && drawable) {
         drawDataToCanvas(this.canvases[i]!, drawable);
@@ -127,7 +128,8 @@ export default class Output extends Component<Props, State> {
       });
     }
 
-    for (let i = 0; i < 4; i++) {
+    const quadrantIndices: QuadrantIndex[] = [0, 1, 2, 3];
+    for (const i of quadrantIndices) {
       const prevDrawable = this.drawable(i, prevProps);
       const drawable = this.drawable(i);
       if (drawable && drawable !== prevDrawable && this.canvases[i]) {
