@@ -4,6 +4,7 @@ import * as style from './style.css';
 import 'add-css:./style.css';
 import 'shared/custom-els/loading-spinner';
 import { SourceImage } from '../';
+import type { ImageMetadata } from 'features/metadata/shared';
 import prettyBytes from './pretty-bytes';
 import { Arrow, DownloadIcon } from 'client/lazy-app/icons';
 
@@ -14,6 +15,7 @@ interface Props {
   downloadUrl?: string;
   flipSide: boolean;
   typeLabel: string;
+  outputMetadata?: ImageMetadata;
 }
 
 interface State {
@@ -21,6 +23,67 @@ interface State {
 }
 
 const loadingReactionDelay = 500;
+
+function formatMetadataSummary(metadata?: ImageMetadata): string {
+  if (!metadata) return 'No metadata';
+  
+  const parts: string[] = [];
+  
+  if (metadata.exif) {
+    parts.push('EXIF');
+  }
+  if (metadata.icc) {
+    parts.push('ICC');
+  }
+  if (metadata.xmp) {
+    parts.push('XMP');
+  }
+  
+  if (parts.length === 0) {
+    return 'No metadata';
+  }
+  
+  return parts.join(' + ');
+}
+
+function formatMetadataDetails(metadata?: ImageMetadata): string {
+  if (!metadata) return '';
+  
+  const details: string[] = [];
+  
+  if (metadata.cameraMake || metadata.cameraModel) {
+    const cameraParts: string[] = [];
+    if (metadata.cameraMake) cameraParts.push(metadata.cameraMake);
+    if (metadata.cameraModel) cameraParts.push(metadata.cameraModel);
+    if (cameraParts.length > 0) {
+      details.push('📷 ' + cameraParts.join(' '));
+    }
+  }
+  
+  if (metadata.colorSpace) {
+    details.push('🎨 Color: ' + metadata.colorSpace);
+  }
+  
+  if (metadata.orientation && metadata.orientation !== 1) {
+    const orientationLabels: Record<number, string> = {
+      1: 'Normal',
+      2: 'Mirrored horizontal',
+      3: 'Rotated 180°',
+      4: 'Mirrored vertical',
+      5: 'Mirrored horizontal then rotated 90° CCW',
+      6: 'Rotated 90° CW',
+      7: 'Mirrored horizontal then rotated 90° CW',
+      8: 'Rotated 90° CCW',
+    };
+    details.push('🔄 Orientation: ' + (orientationLabels[metadata.orientation] || metadata.orientation));
+  }
+  
+  if (metadata.dateTime) {
+    details.push('📅 ' + metadata.dateTime);
+  }
+  
+  return details.join('\n');
+}
 
 export default class Results extends Component<Props, State> {
   state: State = {
@@ -59,7 +122,7 @@ export default class Results extends Component<Props, State> {
   };
 
   render(
-    { source, imageFile, downloadUrl, flipSide, typeLabel }: Props,
+    { source, imageFile, downloadUrl, flipSide, typeLabel, outputMetadata }: Props,
     { showLoadingState }: State,
   ) {
     const prettySize = imageFile && prettyBytes(imageFile.size);
@@ -72,6 +135,12 @@ export default class Results extends Component<Props, State> {
       const absolutePercent = Math.round(Math.abs(diff) * 100);
       percent = diff > 1 ? absolutePercent - 100 : 100 - absolutePercent;
     }
+
+    const sourceMetadata = source?.metadata;
+    const sourceMetadataSummary = formatMetadataSummary(sourceMetadata);
+    const sourceMetadataDetails = formatMetadataDetails(sourceMetadata);
+    const outputMetadataSummary = outputMetadata ? formatMetadataSummary(outputMetadata) : '';
+    const outputMetadataDetails = outputMetadata ? formatMetadataDetails(outputMetadata) : '';
 
     return (
       <div
@@ -118,6 +187,30 @@ export default class Results extends Component<Props, State> {
               </div>
             </div>
           </div>
+          {(sourceMetadataSummary !== 'No metadata' || outputMetadataSummary) && (
+            <div class={style.metadataSection}>
+              <div class={style.metadataRow}>
+                <span class={style.metadataLabel}>Original:</span>
+                <span 
+                  class={style.metadataValue}
+                  title={sourceMetadataDetails}
+                >
+                  {sourceMetadataSummary}
+                </span>
+              </div>
+              {outputMetadataSummary && (
+                <div class={style.metadataRow}>
+                  <span class={style.metadataLabel}>Output:</span>
+                  <span 
+                    class={style.metadataValue}
+                    title={outputMetadataDetails}
+                  >
+                    {outputMetadataSummary}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <a
           class={showLoadingState ? style.downloadDisable : style.download}

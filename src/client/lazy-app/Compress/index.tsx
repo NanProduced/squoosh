@@ -11,6 +11,7 @@ import {
   abortable,
   assertSignal,
   ImageMimeTypes,
+  blobToArrayBuffer,
 } from '../util';
 import {
   PreprocessorState,
@@ -32,6 +33,17 @@ import WorkerBridge from '../worker-bridge';
 import { resize } from 'features/processors/resize/client';
 import type SnackBarElement from 'shared/custom-els/snack-bar';
 import { drawableToImageData } from '../util/canvas';
+import {
+  ImageMetadata,
+  parseJpegMetadata,
+  parseWebPMetadata,
+  injectJpegMetadata,
+  injectWebPMetadata,
+  MetadataOptions,
+  defaultMetadataOptions,
+  getOrientationDegrees,
+  clearExifOrientation,
+} from 'features/metadata/shared';
 
 export type OutputType = EncoderType | 'identity';
 
@@ -40,11 +52,52 @@ export interface SourceImage {
   decoded: ImageData;
   preprocessed: ImageData;
   vectorImage?: HTMLImageElement;
+  metadata: ImageMetadata;
+  metadataOptions: MetadataOptions;
+}
+
+async function parseMetadata(file: File, mimeType: string): Promise<ImageMetadata> {
+  try {
+    const buffer = await blobToArrayBuffer(file);
+    if (mimeType === 'image/jpeg') {
+      return parseJpegMetadata(buffer);
+    }
+    if (mimeType === 'image/webp') {
+      return parseWebPMetadata(buffer);
+    }
+  } catch (e) {
+    console.warn('Failed to parse metadata:', e);
+  }
+  return {};
+}
+
+function supportsMetadata(encoderType: string): boolean {
+  return encoderType === 'mozJPEG' || encoderType === 'webP' || encoderType === 'browserJPEG';
+}
+
+function injectMetadata(
+  compressedBuffer: ArrayBuffer,
+  metadata: ImageMetadata,
+  options: MetadataOptions,
+  encoderType: string,
+): ArrayBuffer {
+  try {
+    if (encoderType === 'mozJPEG' || encoderType === 'browserJPEG') {
+      return injectJpegMetadata(compressedBuffer, metadata, options);
+    }
+    if (encoderType === 'webP') {
+      return injectWebPMetadata(compressedBuffer, metadata, options);
+    }
+  } catch (e) {
+    console.warn('Failed to inject metadata:', e);
+  }
+  return compressedBuffer;
 }
 
 interface SideSettings {
   processorState: ProcessorState;
   encoderState?: EncoderState;
+  metadataOptions: MetadataOptions;
 }
 
 interface Side {
@@ -55,6 +108,7 @@ interface Side {
   latestSettings: SideSettings;
   encodedSettings?: SideSettings;
   loading: boolean;
+  outputMetadata?: ImageMetadata;
 }
 
 interface Props {
@@ -172,26 +226,57 @@ async function compressImage(
   encodeData: EncoderState,
   sourceFilename: string,
   workerBridge: WorkerBridge,
-): Promise<File> {
+  metadata: ImageMetadata,
+  metadataOptions: MetadataOptions,
+): Promise<{ file: File; outputMetadata: ImageMetadata | undefined }> {
   assertSignal(signal);
 
   const encoder = encoderMap[encodeData.type];
-  const compressedData = await encoder.encode(
+  let compressedData = await encoder.encode(
     signal,
     workerBridge,
     image,
-    // The type of encodeData.options is enforced via the previous line
     encodeData.options as any,
   );
 
-  // This type ensures the image mimetype is consistent with our mimetype sniffer
+  if (compressedData instanceof Blob) {
+    compressedData = await abortable(signal, compressedData.arrayBuffer());
+  }
+
+  let outputMetadata: ImageMetadata | undefined;
+
+  if (supportsMetadata(encodeData.type) && (metadataOptions.keepExif || metadataOptions.keepIcc || metadataOptions.keepXmp)) {
+    let metadataToUse = { ...metadata };
+    if (metadataOptions.autoRotate && metadataToUse.exif) {
+      metadataToUse.exif = clearExifOrientation(metadataToUse.exif);
+    }
+    compressedData = injectMetadata(
+      compressedData as ArrayBuffer,
+      metadataToUse,
+      metadataOptions,
+      encodeData.type,
+    );
+    outputMetadata = {
+      exif: metadataOptions.keepExif ? metadataToUse.exif : undefined,
+      icc: metadataOptions.keepIcc ? metadataToUse.icc : undefined,
+      xmp: metadataOptions.keepXmp ? metadataToUse.xmp : undefined,
+      orientation: metadataOptions.autoRotate ? 1 : metadataToUse.orientation,
+      cameraMake: metadataOptions.keepExif ? metadataToUse.cameraMake : undefined,
+      cameraModel: metadataOptions.keepExif ? metadataToUse.cameraModel : undefined,
+      dateTime: metadataOptions.keepExif ? metadataToUse.dateTime : undefined,
+      colorSpace: metadataOptions.keepIcc ? metadataToUse.colorSpace : undefined,
+    };
+  }
+
   const type: ImageMimeTypes = encoder.meta.mimeType;
 
-  return new File(
+  const file = new File(
     [compressedData],
     sourceFilename.replace(/.[^.]*$/, `.${encoder.meta.extension}`),
     { type },
   );
+
+  return { file, outputMetadata };
 }
 
 function stateForNewSourceData(state: State): State {
@@ -284,17 +369,21 @@ export default class Compress extends Component<Props, State> {
     source: undefined,
     loading: false,
     preprocessorState: defaultPreprocessorState,
-    // Tasking catched side settings if available otherwise taking default settings
     sides: [
       localStorage.getItem('leftSideSettings')
         ? {
             ...JSON.parse(localStorage.getItem('leftSideSettings') as string),
             loading: false,
+            latestSettings: {
+              ...JSON.parse(localStorage.getItem('leftSideSettings') as string)?.latestSettings,
+              metadataOptions: { ...defaultMetadataOptions },
+            },
           }
         : {
             latestSettings: {
               processorState: defaultProcessorState,
               encoderState: undefined,
+              metadataOptions: { ...defaultMetadataOptions },
             },
             loading: false,
           },
@@ -302,6 +391,10 @@ export default class Compress extends Component<Props, State> {
         ? {
             ...JSON.parse(localStorage.getItem('rightSideSettings') as string),
             loading: false,
+            latestSettings: {
+              ...JSON.parse(localStorage.getItem('rightSideSettings') as string)?.latestSettings,
+              metadataOptions: { ...defaultMetadataOptions },
+            },
           }
         : {
             latestSettings: {
@@ -310,6 +403,7 @@ export default class Compress extends Component<Props, State> {
                 type: 'mozJPEG',
                 options: encoderMap.mozJPEG.meta.defaultOptions,
               },
+              metadataOptions: { ...defaultMetadataOptions },
             },
             loading: false,
           },
@@ -378,6 +472,61 @@ export default class Compress extends Component<Props, State> {
         `${index}.latestSettings.encoderState.options`,
         options,
       ),
+    });
+  };
+
+  private onMetadataOptionsChange = (
+    index: 0 | 1,
+    options: MetadataOptions,
+  ): void => {
+    this.setState((state) => {
+      let newState = {
+        ...state,
+        sides: cleanSet(
+          state.sides,
+          `${index}.latestSettings.metadataOptions`,
+          options,
+        ),
+      };
+
+      if (options.autoRotate && state.source?.metadata?.orientation) {
+        const orientationDegrees = getOrientationDegrees(state.source.metadata.orientation);
+        if (orientationDegrees !== 0) {
+          const currentRotate = state.preprocessorState.rotate.rotate;
+          const oldRotate = currentRotate;
+          const newRotate = (currentRotate + orientationDegrees) % 360;
+          const orientationChanged = oldRotate % 180 !== newRotate % 180;
+
+          const newPreprocessorState = cleanSet(
+            state.preprocessorState,
+            'rotate.rotate',
+            newRotate,
+          );
+
+          newState = {
+            ...newState,
+            loading: true,
+            preprocessorState: newPreprocessorState,
+            sides: !orientationChanged
+              ? newState.sides
+              : (newState.sides.map((side) => {
+                  const currentResizeSettings =
+                    side.latestSettings.processorState.resize;
+                  const resizeSettings: Partial<ProcessorState['resize']> = {
+                    width: currentResizeSettings.height,
+                    height: currentResizeSettings.width,
+                  };
+                  return cleanMerge(
+                    side,
+                    'latestSettings.processorState.resize',
+                    resizeSettings,
+                  );
+                }) as [Side, Side]),
+          };
+        }
+      }
+
+      return newState;
     });
   };
 
@@ -678,8 +827,8 @@ export default class Compress extends Component<Props, State> {
 
     let decoded: ImageData;
     let vectorImage: HTMLImageElement | undefined;
+    let metadata: ImageMetadata = {};
 
-    // Handle decoding
     if (needsDecoding) {
       try {
         assertSignal(mainSignal);
@@ -688,9 +837,9 @@ export default class Compress extends Component<Props, State> {
           loading: true,
         });
 
-        // Special-case SVG. We need to avoid createImageBitmap because of
-        // https://bugs.chromium.org/p/chromium/issues/detail?id=606319.
-        // Also, we cache the HTMLImageElement so we can perform vector resizing later.
+        const mimeType = await abortable(mainSignal, sniffMimeType(mainJobState.file));
+        metadata = await parseMetadata(mainJobState.file, mimeType);
+
         if (mainJobState.file.type.startsWith('image/svg+xml')) {
           vectorImage = await processSvg(mainSignal, mainJobState.file);
           decoded = drawableToImageData(vectorImage);
@@ -698,7 +847,6 @@ export default class Compress extends Component<Props, State> {
           decoded = await decodeImage(
             mainSignal,
             mainJobState.file,
-            // Either worker is good enough here.
             this.workerBridges[0],
           );
         }
@@ -754,6 +902,8 @@ export default class Compress extends Component<Props, State> {
           vectorImage,
           preprocessed,
           file: mainJobState.file,
+          metadata,
+          metadataOptions: { ...defaultMetadataOptions },
         };
 
         // Update state for process completion, including intermediate render
@@ -850,6 +1000,7 @@ export default class Compress extends Component<Props, State> {
                   encodedSettings: {
                     ...currentSide.encodedSettings,
                     processorState: jobState.processorState,
+                    metadataOptions: currentSide.latestSettings.metadataOptions,
                   },
                 };
                 const sides = cleanSet(currentState.sides, sideIndex, side);
@@ -859,13 +1010,17 @@ export default class Compress extends Component<Props, State> {
               processed = currentState.sides[sideIndex].processed!;
             }
 
-            file = await compressImage(
+            const compressResult = await compressImage(
               signal,
               processed,
               jobState.encoderState,
               source.file.name,
               workerBridge,
+              source.metadata,
+              currentState.sides[sideIndex].latestSettings.metadataOptions,
             );
+            file = compressResult.file;
+            const outputMetadata = compressResult.outputMetadata;
             data = await decodeImage(signal, file, workerBridge);
 
             this.encodeCache.add({
@@ -876,33 +1031,34 @@ export default class Compress extends Component<Props, State> {
               encoderState: jobState.encoderState,
               processorState: jobState.processorState,
             });
+
+            this.setState((currentState) => {
+              if (signal.aborted) return {};
+              const currentSide = currentState.sides[sideIndex];
+
+              if (currentSide.downloadUrl) {
+                URL.revokeObjectURL(currentSide.downloadUrl);
+              }
+
+              const side: Side = {
+                ...currentSide,
+                data,
+                file,
+                downloadUrl: URL.createObjectURL(file),
+                loading: false,
+                processed,
+                outputMetadata,
+                encodedSettings: {
+                  processorState: jobState.processorState,
+                  encoderState: jobState.encoderState,
+                  metadataOptions: currentSide.latestSettings.metadataOptions,
+                },
+              };
+              const sides = cleanSet(currentState.sides, sideIndex, side);
+              return { sides };
+            });
           }
         }
-
-        this.setState((currentState) => {
-          if (signal.aborted) return {};
-          const currentSide = currentState.sides[sideIndex];
-
-          if (currentSide.downloadUrl) {
-            URL.revokeObjectURL(currentSide.downloadUrl);
-          }
-
-          const side: Side = {
-            ...currentSide,
-            data,
-            file,
-            downloadUrl: URL.createObjectURL(file),
-            loading: false,
-            processed,
-            encodedSettings: {
-              processorState: jobState.processorState,
-              encoderState: jobState.encoderState,
-            },
-          };
-          const sides = cleanSet(currentState.sides, sideIndex, side);
-          return { sides };
-        });
-
         this.activeSideJobs[sideIndex] = undefined;
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') return;
@@ -932,9 +1088,11 @@ export default class Compress extends Component<Props, State> {
         mobileView={mobileView}
         processorState={side.latestSettings.processorState}
         encoderState={side.latestSettings.encoderState}
+        metadataOptions={side.latestSettings.metadataOptions}
         onEncoderTypeChange={this.onEncoderTypeChange}
         onEncoderOptionsChange={this.onEncoderOptionsChange}
         onProcessorOptionsChange={this.onProcessorOptionsChange}
+        onMetadataOptionsChange={this.onMetadataOptionsChange}
         onCopyToOtherSideClick={this.onCopyToOtherClick}
         onSaveSideSettingsClick={this.onSaveSideSettingsClick}
         onImportSideSettingsClick={this.onImportSideSettingsClick}
@@ -948,6 +1106,7 @@ export default class Compress extends Component<Props, State> {
         source={source}
         loading={loading || side.loading}
         flipSide={mobileView || index === 1}
+        outputMetadata={side.outputMetadata}
         typeLabel={
           side.latestSettings.encoderState
             ? encoderMap[side.latestSettings.encoderState.type].meta.label
