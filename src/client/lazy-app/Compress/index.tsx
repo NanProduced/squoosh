@@ -22,7 +22,7 @@ import {
   EncoderType,
   EncoderOptions,
 } from '../feature-meta';
-import Output from './Output';
+import Output, { QuadrantIndex } from './Output';
 import Options from './Options';
 import ResultCache from './result-cache';
 import { cleanMerge, cleanSet } from '../util/clean-modify';
@@ -32,6 +32,18 @@ import WorkerBridge from '../worker-bridge';
 import { resize } from 'features/processors/resize/client';
 import type SnackBarElement from 'shared/custom-els/snack-bar';
 import { drawableToImageData } from '../util/canvas';
+import {
+  WorkerPool,
+  defaultWorkerPool,
+  binarySearchQuality,
+  SearchResult,
+  BinarySearchParams,
+  downloadMarkdown,
+  downloadCSV,
+  ComparisonResult,
+  EncodeFunction,
+  EncodeResult,
+} from './util';
 
 export type OutputType = EncoderType | 'identity';
 
@@ -47,6 +59,11 @@ interface SideSettings {
   encoderState?: EncoderState;
 }
 
+interface SideMetrics {
+  ssim: number;
+  encodeTime: number;
+}
+
 interface Side {
   processed?: ImageData;
   file?: File;
@@ -55,6 +72,9 @@ interface Side {
   latestSettings: SideSettings;
   encodedSettings?: SideSettings;
   loading: boolean;
+  metrics?: SideMetrics;
+  optimalQuality?: number;
+  isOptimizing: boolean;
 }
 
 interface Props {
@@ -65,12 +85,12 @@ interface Props {
 
 interface State {
   source?: SourceImage;
-  sides: [Side, Side];
-  /** Source image load */
+  sides: [Side, Side, Side, Side];
   loading: boolean;
   mobileView: boolean;
   preprocessorState: PreprocessorState;
   encodedPreprocessorState?: PreprocessorState;
+  optimizationInProgress: boolean;
 }
 
 interface MainJob {
@@ -86,6 +106,50 @@ interface SideJob {
 interface LoadingFileInfo {
   loading: boolean;
   filename?: string;
+}
+
+const DEFAULT_ENCODERS: EncoderType[] = ['mozJPEG', 'webP', 'avif', 'jxl'];
+const TARGET_SSIM = 0.95;
+const OPTIMIZATION_PARAMS: BinarySearchParams = {
+  minQuality: 0,
+  maxQuality: 100,
+  targetSSIM: TARGET_SSIM,
+  maxIterations: 10,
+};
+
+function getQualityFromOptions(
+  encoderType: EncoderType,
+  options: EncoderOptions,
+): number {
+  switch (encoderType) {
+    case 'mozJPEG':
+    case 'webP':
+    case 'jxl':
+      return (options as any).quality ?? 75;
+    case 'avif':
+      return (options as any).quality ?? 50;
+    default:
+      return 75;
+  }
+}
+
+function setQualityInOptions(
+  encoderType: EncoderType,
+  options: EncoderOptions,
+  quality: number,
+): EncoderOptions {
+  const newOptions = { ...options };
+  switch (encoderType) {
+    case 'mozJPEG':
+    case 'webP':
+    case 'jxl':
+      (newOptions as any).quality = Math.round(quality);
+      break;
+    case 'avif':
+      (newOptions as any).quality = Math.round(quality);
+      break;
+  }
+  return newOptions;
 }
 
 async function decodeImage(
@@ -115,7 +179,6 @@ async function decodeImage(
         return await workerBridge.qoiDecode(signal, blob);
       }
     }
-    // Otherwise fall through and try built-in decoding for a laugh.
     return await builtinDecode(signal, blob);
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') throw err;
@@ -180,11 +243,9 @@ async function compressImage(
     signal,
     workerBridge,
     image,
-    // The type of encodeData.options is enforced via the previous line
     encodeData.options as any,
   );
 
-  // This type ensures the image mimetype is consistent with our mimetype sniffer
   const type: ImageMimeTypes = encoder.meta.mimeType;
 
   return new File(
@@ -194,11 +255,24 @@ async function compressImage(
   );
 }
 
+function createDefaultSide(encoderType: EncoderType): Side {
+  return {
+    latestSettings: {
+      processorState: { ...defaultProcessorState },
+      encoderState: {
+        type: encoderType,
+        options: { ...encoderMap[encoderType].meta.defaultOptions },
+      },
+    },
+    loading: false,
+    isOptimizing: false,
+  };
+}
+
 function stateForNewSourceData(state: State): State {
   let newState = { ...state };
 
-  for (const i of [0, 1]) {
-    // Ditch previous encodings
+  for (const i of [0, 1, 2, 3]) {
     const downloadUrl = state.sides[i].downloadUrl;
     if (downloadUrl) URL.revokeObjectURL(downloadUrl);
 
@@ -208,6 +282,8 @@ function stateForNewSourceData(state: State): State {
       downloadUrl: undefined,
       data: undefined,
       encodedSettings: undefined,
+      metrics: undefined,
+      optimalQuality: undefined,
     });
   }
 
@@ -219,9 +295,6 @@ async function processSvg(
   blob: Blob,
 ): Promise<HTMLImageElement> {
   assertSignal(signal);
-  // Firefox throws if you try to draw an SVG to canvas that doesn't have width/height.
-  // In Chrome it loads, but drawImage behaves weirdly.
-  // This function sets width/height if it isn't already set.
   const parser = new DOMParser();
   const text = await abortable(signal, blobToText(blob));
   const document = parser.parseFromString(text, 'image/svg+xml');
@@ -246,17 +319,10 @@ async function processSvg(
   );
 }
 
-/**
- * If two processors are disabled, they're considered equivalent, otherwise
- * equivalence is based on ===
- */
 function processorStateEquivalent(a: ProcessorState, b: ProcessorState) {
-  // Quick exit
   if (a === b) return true;
 
-  // All processors have the same keys
   for (const key of Object.keys(a) as Array<keyof ProcessorState>) {
-    // If both processors are disabled, they're the same.
     if (!a[key].enabled && !b[key].enabled) continue;
     if (a !== b) return false;
   }
@@ -265,7 +331,6 @@ function processorStateEquivalent(a: ProcessorState, b: ProcessorState) {
 }
 
 const loadingIndicator = '⏳ ';
-
 const originalDocumentTitle = document.title;
 
 function updateDocumentTitle(loadingFileInfo: LoadingFileInfo): void {
@@ -284,47 +349,32 @@ export default class Compress extends Component<Props, State> {
     source: undefined,
     loading: false,
     preprocessorState: defaultPreprocessorState,
-    // Tasking catched side settings if available otherwise taking default settings
     sides: [
-      localStorage.getItem('leftSideSettings')
-        ? {
-            ...JSON.parse(localStorage.getItem('leftSideSettings') as string),
-            loading: false,
-          }
-        : {
-            latestSettings: {
-              processorState: defaultProcessorState,
-              encoderState: undefined,
-            },
-            loading: false,
-          },
-      localStorage.getItem('rightSideSettings')
-        ? {
-            ...JSON.parse(localStorage.getItem('rightSideSettings') as string),
-            loading: false,
-          }
-        : {
-            latestSettings: {
-              processorState: defaultProcessorState,
-              encoderState: {
-                type: 'mozJPEG',
-                options: encoderMap.mozJPEG.meta.defaultOptions,
-              },
-            },
-            loading: false,
-          },
+      createDefaultSide(DEFAULT_ENCODERS[0]),
+      createDefaultSide(DEFAULT_ENCODERS[1]),
+      createDefaultSide(DEFAULT_ENCODERS[2]),
+      createDefaultSide(DEFAULT_ENCODERS[3]),
     ],
     mobileView: this.widthQuery.matches,
+    optimizationInProgress: false,
   };
 
   private readonly encodeCache = new ResultCache();
-  // One for each side
-  private readonly workerBridges = [new WorkerBridge(), new WorkerBridge()];
-  /** Abort controller for actions that impact both sites, like source image decoding and preprocessing */
+  private readonly workerBridges = [
+    new WorkerBridge(),
+    new WorkerBridge(),
+    new WorkerBridge(),
+    new WorkerBridge(),
+  ];
+  private readonly workerPool = new WorkerPool({ maxConcurrent: 4 });
   private mainAbortController = new AbortController();
-  // And again one for each side
-  private sideAbortControllers = [new AbortController(), new AbortController()];
-  /** For debouncing calls to updateImage for each side. */
+  private sideAbortControllers = [
+    new AbortController(),
+    new AbortController(),
+    new AbortController(),
+    new AbortController(),
+  ];
+  private optimizationAbortController = new AbortController();
   private updateImageTimeout?: number;
 
   constructor(props: Props) {
@@ -340,7 +390,10 @@ export default class Compress extends Component<Props, State> {
     this.setState({ mobileView: this.widthQuery.matches });
   };
 
-  private onEncoderTypeChange = (index: 0 | 1, newType: OutputType): void => {
+  private onEncoderTypeChange = (
+    index: QuadrantIndex,
+    newType: OutputType,
+  ): void => {
     this.setState({
       sides: cleanSet(
         this.state.sides,
@@ -356,7 +409,7 @@ export default class Compress extends Component<Props, State> {
   };
 
   private onProcessorOptionsChange = (
-    index: 0 | 1,
+    index: QuadrantIndex,
     options: ProcessorState,
   ): void => {
     this.setState({
@@ -369,7 +422,7 @@ export default class Compress extends Component<Props, State> {
   };
 
   private onEncoderOptionsChange = (
-    index: 0 | 1,
+    index: QuadrantIndex,
     options: EncoderOptions,
   ): void => {
     this.setState({
@@ -395,17 +448,16 @@ export default class Compress extends Component<Props, State> {
     for (const controller of this.sideAbortControllers) {
       controller.abort();
     }
+    this.optimizationAbortController.abort();
   }
 
   componentDidUpdate(prevProps: Props, prevState: State): void {
     const wasLoading =
       prevState.loading ||
-      prevState.sides[0].loading ||
-      prevState.sides[1].loading;
+      prevState.sides.some((s) => s.loading);
     const isLoading =
       this.state.loading ||
-      this.state.sides[0].loading ||
-      this.state.sides[1].loading;
+      this.state.sides.some((s) => s.loading);
     const sourceChanged = prevState.source !== this.state.source;
     if (wasLoading !== isLoading || sourceChanged) {
       updateDocumentTitle({
@@ -415,126 +467,6 @@ export default class Compress extends Component<Props, State> {
     }
     this.queueUpdateImage();
   }
-
-  private onCopyToOtherClick = async (index: 0 | 1) => {
-    const otherIndex = index ? 0 : 1;
-    const oldSettings = this.state.sides[otherIndex];
-    const newSettings = { ...this.state.sides[index] };
-
-    // Create a new object URL for the new settings. This avoids both sides sharing a URL, which
-    // means it can be safely revoked without impacting the other side.
-    if (newSettings.file) {
-      newSettings.downloadUrl = URL.createObjectURL(newSettings.file);
-    }
-
-    this.setState({
-      sides: cleanSet(this.state.sides, otherIndex, newSettings),
-    });
-
-    const result = await this.props.showSnack('Settings copied across', {
-      timeout: 5000,
-      actions: ['undo', 'dismiss'],
-    });
-
-    if (result !== 'undo') return;
-
-    this.setState({
-      sides: cleanSet(this.state.sides, otherIndex, oldSettings),
-    });
-  };
-  /**
-   * This function saves encodedSettings and latestSettings of
-   * particular side in browser local storage
-   * @param index : (0|1)
-   * @returns
-   */
-  private onSaveSideSettingsClick = async (index: 0 | 1) => {
-    if (index === 0) {
-      const leftSideSettings = JSON.stringify({
-        encodedSettings: this.state.sides[index].encodedSettings,
-        latestSettings: this.state.sides[index].latestSettings,
-      });
-      localStorage.setItem('leftSideSettings', leftSideSettings);
-      // Firing an event when we save side settings in localstorage
-      window.dispatchEvent(new CustomEvent('leftSideSettings'));
-      await this.props.showSnack('Left side settings saved', {
-        timeout: 1500,
-        actions: ['dismiss'],
-      });
-      return;
-    }
-
-    if (index === 1) {
-      const rightSideSettings = JSON.stringify({
-        encodedSettings: this.state.sides[index].encodedSettings,
-        latestSettings: this.state.sides[index].latestSettings,
-      });
-      localStorage.setItem('rightSideSettings', rightSideSettings);
-      // Firing an event when we save side settings in localstorage
-      window.dispatchEvent(new CustomEvent('rightSideSettings'));
-      await this.props.showSnack('Right side settings saved', {
-        timeout: 1500,
-        actions: ['dismiss'],
-      });
-      return;
-    }
-  };
-
-  /**
-   * This function sets the side state with catched localstorage
-   * value as per side index provided
-   * @param index : (0|1)
-   * @returns
-   */
-  private onImportSideSettingsClick = async (index: 0 | 1) => {
-    const leftSideSettingsString = localStorage.getItem('leftSideSettings');
-    const rightSideSettingsString = localStorage.getItem('rightSideSettings');
-
-    if (index === 0 && leftSideSettingsString) {
-      const oldLeftSideSettings = this.state.sides[index];
-      const newLeftSideSettings = {
-        ...this.state.sides[index],
-        ...JSON.parse(leftSideSettingsString),
-      };
-      this.setState({
-        sides: cleanSet(this.state.sides, index, newLeftSideSettings),
-      });
-      const result = await this.props.showSnack('Left side settings imported', {
-        timeout: 3000,
-        actions: ['undo', 'dismiss'],
-      });
-      if (result === 'undo') {
-        this.setState({
-          sides: cleanSet(this.state.sides, index, oldLeftSideSettings),
-        });
-      }
-      return;
-    }
-
-    if (index === 1 && rightSideSettingsString) {
-      const oldRightSideSettings = this.state.sides[index];
-      const newRightSideSettings = {
-        ...this.state.sides[index],
-        ...JSON.parse(rightSideSettingsString),
-      };
-      this.setState({
-        sides: cleanSet(this.state.sides, index, newRightSideSettings),
-      });
-      const result = await this.props.showSnack(
-        'Right side settings imported',
-        {
-          timeout: 3000,
-          actions: ['undo', 'dismiss'],
-        },
-      );
-      if (result === 'undo') {
-        this.setState({
-          sides: cleanSet(this.state.sides, index, oldRightSideSettings),
-        });
-      }
-      return;
-    }
-  };
 
   private onPreprocessorChange = async (
     preprocessorState: PreprocessorState,
@@ -549,7 +481,6 @@ export default class Compress extends Component<Props, State> {
     this.setState((state) => ({
       loading: true,
       preprocessorState,
-      // Flip resize values if orientation has changed
       sides: !orientationChanged
         ? state.sides
         : (state.sides.map((side) => {
@@ -564,17 +495,11 @@ export default class Compress extends Component<Props, State> {
               'latestSettings.processorState.resize',
               resizeSettings,
             );
-          }) as [Side, Side]),
+          }) as [Side, Side, Side, Side]),
     }));
   };
 
-  /**
-   * Debounce the heavy lifting of updateImage.
-   * Otherwise, the thrashing causes jank, and sometimes crashes iOS Safari.
-   */
   private queueUpdateImage({ immediate }: { immediate?: boolean } = {}): void {
-    // Call updateImage after this delay, unless queueUpdateImage is called
-    // again, in which case the timeout is reset.
     const delay = 100;
 
     clearTimeout(this.updateImageTimeout);
@@ -586,22 +511,17 @@ export default class Compress extends Component<Props, State> {
   }
 
   private sourceFile: File;
-  /** The in-progress job for decoding and preprocessing */
   private activeMainJob?: MainJob;
-  /** The in-progress job for each side (processing and encoding) */
-  private activeSideJobs: [SideJob?, SideJob?] = [undefined, undefined];
+  private activeSideJobs: [SideJob?, SideJob?, SideJob?, SideJob?] = [
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+  ];
 
-  /**
-   * Perform image processing.
-   *
-   * This function is a monster, but I didn't want to break it up, because it
-   * never gets partially called. Instead, it looks at the current state, and
-   * decides which steps can be skipped, and which can be cached.
-   */
   private async updateImage() {
     const currentState = this.state;
 
-    // State of the last completed job, or ongoing job
     const latestMainJobState: Partial<MainJob> = this.activeMainJob || {
       file: currentState.source && currentState.source.file,
       preprocessorState: currentState.encodedPreprocessorState,
@@ -616,20 +536,17 @@ export default class Compress extends Component<Props, State> {
         },
     );
 
-    // State for this job
     const mainJobState: MainJob = {
       file: this.sourceFile,
       preprocessorState: currentState.preprocessorState,
     };
     const sideJobStates: SideJob[] = currentState.sides.map((side) => ({
-      // If there isn't an encoder selected, we don't process either
       processorState: side.latestSettings.encoderState
         ? side.latestSettings.processorState
         : defaultProcessorState,
       encoderState: side.latestSettings.encoderState,
     }));
 
-    // Figure out what needs doing:
     const needsDecoding = latestMainJobState.file != mainJobState.file;
     const needsPreprocessing =
       needsDecoding ||
@@ -638,10 +555,9 @@ export default class Compress extends Component<Props, State> {
       const needsProcessing =
         needsPreprocessing ||
         !latestSideJob.processorState ||
-        // If we're going to or from 'original image' we should reprocess
         !!latestSideJob.encoderState !== !!sideJobStates[i].encoderState ||
         !processorStateEquivalent(
-          latestSideJob.processorState,
+          latestSideJob.processorState!,
           sideJobStates[i].processorState,
         );
 
@@ -655,7 +571,6 @@ export default class Compress extends Component<Props, State> {
 
     let jobNeeded = false;
 
-    // Abort running tasks & cycle the controllers
     if (needsDecoding || needsPreprocessing) {
       this.mainAbortController.abort();
       this.mainAbortController = new AbortController();
@@ -679,7 +594,6 @@ export default class Compress extends Component<Props, State> {
     let decoded: ImageData;
     let vectorImage: HTMLImageElement | undefined;
 
-    // Handle decoding
     if (needsDecoding) {
       try {
         assertSignal(mainSignal);
@@ -688,9 +602,6 @@ export default class Compress extends Component<Props, State> {
           loading: true,
         });
 
-        // Special-case SVG. We need to avoid createImageBitmap because of
-        // https://bugs.chromium.org/p/chromium/issues/detail?id=606319.
-        // Also, we cache the HTMLImageElement so we can perform vector resizing later.
         if (mainJobState.file.type.startsWith('image/svg+xml')) {
           vectorImage = await processSvg(mainSignal, mainJobState.file);
           decoded = drawableToImageData(vectorImage);
@@ -698,12 +609,10 @@ export default class Compress extends Component<Props, State> {
           decoded = await decodeImage(
             mainSignal,
             mainJobState.file,
-            // Either worker is good enough here.
             this.workerBridges[0],
           );
         }
 
-        // Set default resize values
         this.setState((currentState) => {
           if (mainSignal.aborted) return {};
           const sides = currentState.sides.map((side) => {
@@ -711,7 +620,6 @@ export default class Compress extends Component<Props, State> {
               width: decoded.width,
               height: decoded.height,
               method: vectorImage ? 'vector' : 'lanczos3',
-              // Disable resizing, to make it clearer to the user that something changed here
               enabled: false,
             };
             return cleanMerge(
@@ -719,7 +627,7 @@ export default class Compress extends Component<Props, State> {
               'latestSettings.processorState.resize',
               resizeState,
             );
-          }) as [Side, Side];
+          }) as [Side, Side, Side, Side];
           return { sides };
         });
       } catch (err) {
@@ -733,7 +641,6 @@ export default class Compress extends Component<Props, State> {
 
     let source: SourceImage;
 
-    // Handle preprocessing
     if (needsPreprocessing) {
       try {
         assertSignal(mainSignal);
@@ -745,7 +652,6 @@ export default class Compress extends Component<Props, State> {
           mainSignal,
           decoded,
           mainJobState.preprocessorState,
-          // Either worker is good enough here.
           this.workerBridges[0],
         );
 
@@ -756,7 +662,6 @@ export default class Compress extends Component<Props, State> {
           file: mainJobState.file,
         };
 
-        // Update state for process completion, including intermediate render
         this.setState((currentState) => {
           if (mainSignal.aborted) return {};
           let newState: State = {
@@ -769,13 +674,12 @@ export default class Compress extends Component<Props, State> {
 
               const newSide: Side = {
                 ...side,
-                // Intermediate render
                 data: preprocessed,
                 processed: undefined,
                 encodedSettings: undefined,
               };
               return newSide;
-            }) as [Side, Side],
+            }) as [Side, Side, Side, Side],
           };
           newState = stateForNewSourceData(newState);
           return newState;
@@ -790,13 +694,10 @@ export default class Compress extends Component<Props, State> {
       source = currentState.source!;
     }
 
-    // That's the main part of the job done.
     this.activeMainJob = undefined;
 
-    // Allow side jobs to happen in parallel
     sideWorksNeeded.forEach(async (sideWorkNeeded, sideIndex) => {
       try {
-        // If processing is true, encoding is always true.
         if (!sideWorkNeeded.encoding) return;
 
         const signal = sideSignals[sideIndex];
@@ -806,8 +707,6 @@ export default class Compress extends Component<Props, State> {
         let data: ImageData;
         let processed: ImageData | undefined = undefined;
 
-        // If there's no encoder state, this is "original image", which also
-        // doesn't allow processing.
         if (!jobState.encoderState) {
           file = source.file;
           data = source.preprocessed;
@@ -821,7 +720,6 @@ export default class Compress extends Component<Props, State> {
           if (cacheResult) {
             ({ file, processed, data } = cacheResult);
           } else {
-            // Set loading state for this side
             this.setState((currentState) => {
               if (signal.aborted) return {};
               const sides = cleanMerge(currentState.sides, sideIndex, {
@@ -838,14 +736,12 @@ export default class Compress extends Component<Props, State> {
                 workerBridge,
               );
 
-              // Update state for process completion, including intermediate render
               this.setState((currentState) => {
                 if (signal.aborted) return {};
                 const currentSide = currentState.sides[sideIndex];
                 const side: Side = {
                   ...currentSide,
                   processed,
-                  // Intermediate render
                   data: processed,
                   encodedSettings: {
                     ...currentSide.encodedSettings,
@@ -859,6 +755,7 @@ export default class Compress extends Component<Props, State> {
               processed = currentState.sides[sideIndex].processed!;
             }
 
+            const encodeStartTime = performance.now();
             file = await compressImage(
               signal,
               processed,
@@ -866,7 +763,16 @@ export default class Compress extends Component<Props, State> {
               source.file.name,
               workerBridge,
             );
+            const encodeTime = performance.now() - encodeStartTime;
+
             data = await decodeImage(signal, file, workerBridge);
+
+            const ssim = await workerBridge.ssim(
+              signal,
+              source.preprocessed,
+              data,
+              true,
+            );
 
             this.encodeCache.add({
               data,
@@ -875,6 +781,17 @@ export default class Compress extends Component<Props, State> {
               preprocessed: source.preprocessed,
               encoderState: jobState.encoderState,
               processorState: jobState.processorState,
+            });
+
+            this.setState((currentState) => {
+              if (signal.aborted) return {};
+              const sides = cleanMerge(currentState.sides, sideIndex, {
+                metrics: {
+                  ssim: ssim.ssim,
+                  encodeTime,
+                },
+              });
+              return { sides };
             });
           }
         }
@@ -918,16 +835,305 @@ export default class Compress extends Component<Props, State> {
     });
   }
 
+  private createEncodeFunction = (
+    quadrantIndex: QuadrantIndex,
+  ): EncodeFunction => {
+    const side = this.state.sides[quadrantIndex];
+    const source = this.state.source!;
+    const workerBridge = this.workerBridges[quadrantIndex];
+    const encoderState = side.latestSettings.encoderState!;
+
+    return async (quality: number): Promise<EncodeResult> => {
+      const signal = this.optimizationAbortController.signal;
+      assertSignal(signal);
+
+      const optionsWithQuality = setQualityInOptions(
+        encoderState.type,
+        encoderState.options,
+        quality,
+      );
+
+      const currentEncoderState: EncoderState = {
+        type: encoderState.type,
+        options: optionsWithQuality,
+      };
+
+      const cacheResult = this.encodeCache.match(
+        source.preprocessed,
+        side.latestSettings.processorState,
+        currentEncoderState,
+      );
+
+      if (cacheResult) {
+        const ssim = await workerBridge.ssimCalculate(
+          signal,
+          source.preprocessed,
+          cacheResult.data,
+          true,
+        );
+        return {
+          quality,
+          ssim: ssim.ssim,
+          size: cacheResult.file.size,
+          encodeTime: 0,
+        };
+      }
+
+      let processed = side.processed;
+      if (!processed) {
+        processed = await processImage(
+          signal,
+          source,
+          side.latestSettings.processorState,
+          workerBridge,
+        );
+      }
+
+      const encodeStartTime = performance.now();
+      const file = await compressImage(
+        signal,
+        processed,
+        currentEncoderState,
+        source.file.name,
+        workerBridge,
+      );
+      const encodeTime = performance.now() - encodeStartTime;
+
+      const data = await decodeImage(signal, file, workerBridge);
+      const ssim = await workerBridge.ssimCalculate(
+        signal,
+        source.preprocessed,
+        data,
+        true,
+      );
+
+      this.encodeCache.add({
+        data,
+        processed,
+        file,
+        preprocessed: source.preprocessed,
+        encoderState: currentEncoderState,
+        processorState: side.latestSettings.processorState,
+      });
+
+      return {
+        quality,
+        ssim: ssim.ssim,
+        size: file.size,
+        encodeTime,
+      };
+    };
+  };
+
+  private onOptimizeAll = async (): Promise<void> => {
+    if (!this.state.source) return;
+
+    const sidesWithEncoder = this.state.sides.filter((s) => s.encodedSettings?.encoderState);
+    if (sidesWithEncoder.length === 0) {
+      await this.props.showSnack('No encoders configured for optimization', {
+        timeout: 3000,
+        actions: ['dismiss'],
+      });
+      return;
+    }
+
+    this.optimizationAbortController.abort();
+    this.optimizationAbortController = new AbortController();
+    const signal = this.optimizationAbortController.signal;
+
+    this.setState({ optimizationInProgress: true });
+
+    this.props.showSnack('Optimizing all encoders...', {
+      timeout: 0,
+    });
+
+    try {
+      const optimizationTasks: Promise<void>[] = [];
+
+      for (let i = 0; i < 4; i++) {
+        const side = this.state.sides[i];
+        if (!side.latestSettings.encoderState) continue;
+
+        this.setState((currentState) => {
+          const sides = cleanMerge(currentState.sides, i, {
+            isOptimizing: true,
+          });
+          return { sides };
+        });
+
+        const encodeFn = this.createEncodeFunction(i as QuadrantIndex);
+        const encoderType = side.latestSettings.encoderState.type;
+
+        const task = (async () => {
+          try {
+            const result = await binarySearchQuality(
+              encodeFn,
+              OPTIMIZATION_PARAMS,
+            );
+
+            if (signal.aborted) return;
+
+            const newOptions = setQualityInOptions(
+              encoderType,
+              side.latestSettings.encoderState!.options,
+              result.quality,
+            );
+
+            this.setState((currentState) => {
+              let sides = cleanSet(
+                currentState.sides,
+                `${i}.latestSettings.encoderState.options`,
+                newOptions,
+              );
+              sides = cleanMerge(sides, i, {
+                isOptimizing: false,
+                optimalQuality: result.quality,
+              });
+              return { sides };
+            });
+          } catch (err) {
+            if (err instanceof Error && err.name === 'AbortError') return;
+            console.error(`Optimization failed for quadrant ${i}:`, err);
+            this.setState((currentState) => {
+              const sides = cleanMerge(currentState.sides, i, {
+                isOptimizing: false,
+              });
+              return { sides };
+            });
+          }
+        })();
+
+        optimizationTasks.push(task);
+      }
+
+      await Promise.all(optimizationTasks);
+
+      if (!signal.aborted) {
+        this.setState({ optimizationInProgress: false });
+        await this.props.showSnack('Optimization complete!', {
+          timeout: 3000,
+          actions: ['dismiss'],
+        });
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return;
+      this.setState({ optimizationInProgress: false });
+      await this.props.showSnack(`Optimization error: ${err}`, {
+        timeout: 5000,
+        actions: ['dismiss'],
+      });
+    }
+  };
+
+  private onExportMarkdown = (): void => {
+    const results: ComparisonResult[] = [];
+    const source = this.state.source;
+
+    if (!source) return;
+
+    for (let i = 0; i < 4; i++) {
+      const side = this.state.sides[i];
+      if (!side.file || !side.latestSettings.encoderState) continue;
+
+      const encoderName = encoderMap[side.latestSettings.encoderState.type].meta.label;
+      const quality = getQualityFromOptions(
+        side.latestSettings.encoderState.type,
+        side.latestSettings.encoderState.options,
+      );
+
+      results.push({
+        quadrant: i as QuadrantIndex,
+        encoderName,
+        quality,
+        originalSize: source.file.size,
+        compressedSize: side.file.size,
+        compressionRatio: side.file.size / source.file.size,
+        ssim: side.metrics?.ssim ?? 0,
+        encodeTime: side.metrics?.encodeTime ?? 0,
+        isOptimal: side.optimalQuality !== undefined && side.optimalQuality === quality,
+      });
+    }
+
+    if (results.length === 0) {
+      this.props.showSnack('No encoder results to export', {
+        timeout: 3000,
+        actions: ['dismiss'],
+      });
+      return;
+    }
+
+    downloadMarkdown(results);
+    this.props.showSnack('Markdown report downloaded', {
+      timeout: 2000,
+      actions: ['dismiss'],
+    });
+  };
+
+  private onExportCSV = (): void => {
+    const results: ComparisonResult[] = [];
+    const source = this.state.source;
+
+    if (!source) return;
+
+    for (let i = 0; i < 4; i++) {
+      const side = this.state.sides[i];
+      if (!side.file || !side.latestSettings.encoderState) continue;
+
+      const encoderName = encoderMap[side.latestSettings.encoderState.type].meta.label;
+      const quality = getQualityFromOptions(
+        side.latestSettings.encoderState.type,
+        side.latestSettings.encoderState.options,
+      );
+
+      results.push({
+        quadrant: i as QuadrantIndex,
+        encoderName,
+        quality,
+        originalSize: source.file.size,
+        compressedSize: side.file.size,
+        compressionRatio: side.file.size / source.file.size,
+        ssim: side.metrics?.ssim ?? 0,
+        encodeTime: side.metrics?.encodeTime ?? 0,
+        isOptimal: side.optimalQuality !== undefined && side.optimalQuality === quality,
+      });
+    }
+
+    if (results.length === 0) {
+      this.props.showSnack('No encoder results to export', {
+        timeout: 3000,
+        actions: ['dismiss'],
+      });
+      return;
+    }
+
+    downloadCSV(results);
+    this.props.showSnack('CSV report downloaded', {
+      timeout: 2000,
+      actions: ['dismiss'],
+    });
+  };
+
   render(
     { onBack }: Props,
-    { loading, sides, source, mobileView, preprocessorState }: State,
+    { loading, sides, source, mobileView, preprocessorState, optimizationInProgress }: State,
   ) {
-    const [leftSide, rightSide] = sides;
-    const [leftImageData, rightImageData] = sides.map((i) => i.data);
+    const quadrants = sides.map((side, index) => {
+      const displaySettings =
+        side.encodedSettings || side.latestSettings;
+      const imgContain =
+        displaySettings.processorState.resize.enabled &&
+        displaySettings.processorState.resize.fitMethod === 'contain';
+
+      return {
+        compressed: side.data,
+        imgContain,
+      };
+    });
 
     const options = sides.map((side, index) => (
       <Options
-        index={index as 0 | 1}
+        key={index}
+        index={index as QuadrantIndex}
         source={source}
         mobileView={mobileView}
         processorState={side.latestSettings.processorState}
@@ -935,19 +1141,20 @@ export default class Compress extends Component<Props, State> {
         onEncoderTypeChange={this.onEncoderTypeChange}
         onEncoderOptionsChange={this.onEncoderOptionsChange}
         onProcessorOptionsChange={this.onProcessorOptionsChange}
-        onCopyToOtherSideClick={this.onCopyToOtherClick}
-        onSaveSideSettingsClick={this.onSaveSideSettingsClick}
-        onImportSideSettingsClick={this.onImportSideSettingsClick}
+        onCopyToOtherSideClick={() => {}}
+        onSaveSideSettingsClick={() => {}}
+        onImportSideSettingsClick={() => {}}
       />
     ));
 
     const results = sides.map((side, index) => (
       <Results
+        key={index}
         downloadUrl={side.downloadUrl}
         imageFile={side.file}
         source={source}
-        loading={loading || side.loading}
-        flipSide={mobileView || index === 1}
+        loading={loading || side.loading || side.isOptimizing}
+        flipSide={mobileView || index % 2 === 1}
         typeLabel={
           side.latestSettings.encoderState
             ? encoderMap[side.latestSettings.encoderState.type].meta.label
@@ -956,28 +1163,12 @@ export default class Compress extends Component<Props, State> {
       />
     ));
 
-    // For rendering, we ideally want the settings that were used to create the
-    // data, not the latest settings.
-    const leftDisplaySettings =
-      leftSide.encodedSettings || leftSide.latestSettings;
-    const rightDisplaySettings =
-      rightSide.encodedSettings || rightSide.latestSettings;
-    const leftImgContain =
-      leftDisplaySettings.processorState.resize.enabled &&
-      leftDisplaySettings.processorState.resize.fitMethod === 'contain';
-    const rightImgContain =
-      rightDisplaySettings.processorState.resize.enabled &&
-      rightDisplaySettings.processorState.resize.fitMethod === 'contain';
-
     return (
       <div class={style.compress}>
         <Output
           source={source}
           mobileView={mobileView}
-          leftCompressed={leftImageData}
-          rightCompressed={rightImageData}
-          leftImgContain={leftImgContain}
-          rightImgContain={rightImgContain}
+          quadrants={quadrants as any}
           preprocessorState={preprocessorState}
           onPreprocessorChange={this.onPreprocessorChange}
         />
@@ -994,13 +1185,76 @@ export default class Compress extends Component<Props, State> {
             />
           </svg>
         </button>
+
+        <div style={{
+          position: 'absolute',
+          top: '9px',
+          right: '9px',
+          zIndex: 100,
+          display: 'flex',
+          gap: '6px',
+        }}>
+          <button
+            onClick={this.onOptimizeAll}
+            disabled={optimizationInProgress}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '6px',
+              border: 'none',
+              cursor: optimizationInProgress ? 'not-allowed' : 'pointer',
+              background: optimizationInProgress ? '#555' : '#3b82f6',
+              color: '#fff',
+              fontSize: '14px',
+              fontWeight: '600',
+            }}
+          >
+            {optimizationInProgress ? '⏳ Optimizing...' : '🎯 Optimize All'}
+          </button>
+          <button
+            onClick={this.onExportMarkdown}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '6px',
+              border: 'none',
+              cursor: 'pointer',
+              background: '#10b981',
+              color: '#fff',
+              fontSize: '14px',
+              fontWeight: '600',
+            }}
+          >
+            📄 MD
+          </button>
+          <button
+            onClick={this.onExportCSV}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '6px',
+              border: 'none',
+              cursor: 'pointer',
+              background: '#f59e0b',
+              color: '#fff',
+              fontSize: '14px',
+              fontWeight: '600',
+            }}
+          >
+            📊 CSV
+          </button>
+        </div>
+
         {mobileView ? (
           <div class={style.options}>
             <multi-panel class={style.multiPanel} open-one-only>
-              <div class={style.options1Theme}>{results[0]}</div>
-              <div class={style.options1Theme}>{options[0]}</div>
-              <div class={style.options2Theme}>{results[1]}</div>
-              <div class={style.options2Theme}>{options[1]}</div>
+              {sides.map((_, i) => (
+                <div key={`result-${i}`} class={i % 2 === 0 ? style.options1Theme : style.options2Theme}>
+                  {results[i]}
+                </div>
+              ))}
+              {sides.map((_, i) => (
+                <div key={`option-${i}`} class={i % 2 === 0 ? style.options1Theme : style.options2Theme}>
+                  {options[i]}
+                </div>
+              ))}
             </multi-panel>
           </div>
         ) : (
@@ -1008,10 +1262,14 @@ export default class Compress extends Component<Props, State> {
             <div class={style.options1} key="options1">
               {options[0]}
               {results[0]}
+              {options[2]}
+              {results[2]}
             </div>,
             <div class={style.options2} key="options2">
               {options[1]}
               {results[1]}
+              {options[3]}
+              {results[3]}
             </div>,
           ]
         )}

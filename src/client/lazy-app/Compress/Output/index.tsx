@@ -2,7 +2,7 @@ import { h, Component, Fragment } from 'preact';
 import type PinchZoom from './custom-els/PinchZoom';
 import type { ScaleToOpts } from './custom-els/PinchZoom';
 import './custom-els/PinchZoom';
-import './custom-els/TwoUp';
+import './custom-els/FourUp';
 import * as style from './style.css';
 import 'add-css:./style.css';
 import { shallowEqual, isSafari } from '../../util';
@@ -15,20 +15,25 @@ import {
   ToggleBackgroundActiveIcon,
   RotateIcon,
 } from '../../icons';
-import { twoUpHandle } from './custom-els/TwoUp/styles.css';
+import { fourUpHorizontalHandle, fourUpVerticalHandle, fourUpCenterHandle } from './custom-els/FourUp/styles.css';
 import type { PreprocessorState } from '../../feature-meta';
 import { cleanSet } from '../../util/clean-modify';
 import type { SourceImage } from '../../Compress';
 import { linkRef } from 'shared/prerendered-app/util';
 import { drawDataToCanvas } from 'client/lazy-app/util/canvas';
+
+export type QuadrantIndex = 0 | 1 | 2 | 3;
+
+interface QuadrantProps {
+  compressed?: ImageData;
+  imgContain: boolean;
+}
+
 interface Props {
   source?: SourceImage;
   preprocessorState?: PreprocessorState;
   mobileView: boolean;
-  leftCompressed?: ImageData;
-  rightCompressed?: ImageData;
-  leftImgContain: boolean;
-  rightImgContain: boolean;
+  quadrants: [QuadrantProps, QuadrantProps, QuadrantProps, QuadrantProps];
   onPreprocessorChange: (newState: PreprocessorState) => void;
 }
 
@@ -53,53 +58,52 @@ export default class Output extends Component<Props, State> {
     altBackground: false,
     aliasing: false,
   };
-  canvasLeft?: HTMLCanvasElement;
-  canvasRight?: HTMLCanvasElement;
-  pinchZoomLeft?: PinchZoom;
-  pinchZoomRight?: PinchZoom;
+
+  canvases: (HTMLCanvasElement | undefined)[] = [
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+  ];
+  pinchZooms: (PinchZoom | undefined)[] = [
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+  ];
   scaleInput?: HTMLInputElement;
   retargetedEvents = new WeakSet<Event>();
 
   componentDidMount() {
-    const leftDraw = this.leftDrawable();
-    const rightDraw = this.rightDrawable();
-
-    // Reset the pinch zoom, which may have an position set from the previous view, after pressing
-    // the back button.
-    this.pinchZoomLeft!.setTransform({
-      allowChangeEvent: true,
-      x: 0,
-      y: 0,
-      scale: 1,
-    });
-
-    if (this.canvasLeft && leftDraw) {
-      drawDataToCanvas(this.canvasLeft, leftDraw);
+    for (let i = 0; i < 4; i++) {
+      const drawable = this.drawable(i);
+      if (this.canvases[i] && drawable) {
+        drawDataToCanvas(this.canvases[i]!, drawable);
+      }
     }
-    if (this.canvasRight && rightDraw) {
-      drawDataToCanvas(this.canvasRight, rightDraw);
+
+    if (this.pinchZooms[0]) {
+      this.pinchZooms[0]!.setTransform({
+        allowChangeEvent: true,
+        x: 0,
+        y: 0,
+        scale: 1,
+      });
     }
   }
 
   componentDidUpdate(prevProps: Props, prevState: State) {
-    const prevLeftDraw = this.leftDrawable(prevProps);
-    const prevRightDraw = this.rightDrawable(prevProps);
-    const leftDraw = this.leftDrawable();
-    const rightDraw = this.rightDrawable();
     const sourceFileChanged =
-      // Has the value become (un)defined?
       !!this.props.source !== !!prevProps.source ||
-      // Or has the file changed?
       (this.props.source &&
         prevProps.source &&
         this.props.source.file !== prevProps.source.file);
 
     const oldSourceData = prevProps.source && prevProps.source.preprocessed;
     const newSourceData = this.props.source && this.props.source.preprocessed;
-    const pinchZoom = this.pinchZoomLeft!;
+    const pinchZoom = this.pinchZooms[0];
 
-    if (sourceFileChanged) {
-      // New image? Reset the pinch-zoom.
+    if (sourceFileChanged && pinchZoom) {
       pinchZoom.setTransform({
         allowChangeEvent: true,
         x: 0,
@@ -109,11 +113,9 @@ export default class Output extends Component<Props, State> {
     } else if (
       oldSourceData &&
       newSourceData &&
-      oldSourceData !== newSourceData
+      oldSourceData !== newSourceData &&
+      pinchZoom
     ) {
-      // Since the pinch zoom transform origin is the top-left of the content, we need to flip
-      // things around a bit when the content size changes, so the new content appears as if it were
-      // central to the previous content.
       const scaleChange = 1 - pinchZoom.scale;
       const oldXScaleOffset = (oldSourceData.width / 2) * scaleChange;
       const oldYScaleOffset = (oldSourceData.height / 2) * scaleChange;
@@ -125,11 +127,12 @@ export default class Output extends Component<Props, State> {
       });
     }
 
-    if (leftDraw && leftDraw !== prevLeftDraw && this.canvasLeft) {
-      drawDataToCanvas(this.canvasLeft, leftDraw);
-    }
-    if (rightDraw && rightDraw !== prevRightDraw && this.canvasRight) {
-      drawDataToCanvas(this.canvasRight, rightDraw);
+    for (let i = 0; i < 4; i++) {
+      const prevDrawable = this.drawable(i, prevProps);
+      const drawable = this.drawable(i);
+      if (drawable && drawable !== prevDrawable && this.canvases[i]) {
+        drawDataToCanvas(this.canvases[i]!, drawable);
+      }
     }
   }
 
@@ -140,12 +143,14 @@ export default class Output extends Component<Props, State> {
     );
   }
 
-  private leftDrawable(props: Props = this.props): ImageData | undefined {
-    return props.leftCompressed || (props.source && props.source.preprocessed);
-  }
-
-  private rightDrawable(props: Props = this.props): ImageData | undefined {
-    return props.rightCompressed || (props.source && props.source.preprocessed);
+  private drawable(
+    index: QuadrantIndex,
+    props: Props = this.props,
+  ): ImageData | undefined {
+    return (
+      props.quadrants[index].compressed ||
+      (props.source && props.source.preprocessed)
+    );
   }
 
   private toggleAliasing = () => {
@@ -161,13 +166,13 @@ export default class Output extends Component<Props, State> {
   };
 
   private zoomIn = () => {
-    if (!this.pinchZoomLeft) throw Error('Missing pinch-zoom element');
-    this.pinchZoomLeft.scaleTo(this.state.scale * 1.25, scaleToOpts);
+    if (!this.pinchZooms[0]) throw Error('Missing pinch-zoom element');
+    this.pinchZooms[0].scaleTo(this.state.scale * 1.25, scaleToOpts);
   };
 
   private zoomOut = () => {
-    if (!this.pinchZoomLeft) throw Error('Missing pinch-zoom element');
-    this.pinchZoomLeft.scaleTo(this.state.scale / 1.25, scaleToOpts);
+    if (!this.pinchZooms[0]) throw Error('Missing pinch-zoom element');
+    this.pinchZooms[0].scaleTo(this.state.scale / 1.25, scaleToOpts);
   };
 
   private onRotateClick = () => {
@@ -186,9 +191,6 @@ export default class Output extends Component<Props, State> {
   private onScaleValueFocus = () => {
     this.setState({ editingScale: true }, () => {
       if (this.scaleInput) {
-        // Firefox unfocuses the input straight away unless I force a style
-        // calculation here. I have no idea why, but it's late and I'm quite
-        // tired.
         getComputedStyle(this.scaleInput).transform;
         this.scaleInput.focus();
       }
@@ -203,56 +205,52 @@ export default class Output extends Component<Props, State> {
     const target = event.target as HTMLInputElement;
     const percent = parseFloat(target.value);
     if (isNaN(percent)) return;
-    if (!this.pinchZoomLeft) throw Error('Missing pinch-zoom element');
+    if (!this.pinchZooms[0]) throw Error('Missing pinch-zoom element');
 
-    this.pinchZoomLeft.scaleTo(percent / 100, scaleToOpts);
+    this.pinchZooms[0].scaleTo(percent / 100, scaleToOpts);
   };
 
-  private onPinchZoomLeftChange = (event: Event) => {
-    if (!this.pinchZoomRight || !this.pinchZoomLeft) {
+  private onPinchZoomChange = (event: Event) => {
+    const mainPinchZoom = this.pinchZooms[0];
+    if (!mainPinchZoom) {
       throw Error('Missing pinch-zoom element');
     }
     this.setState({
-      scale: this.pinchZoomLeft.scale,
+      scale: mainPinchZoom.scale,
     });
-    this.pinchZoomRight.setTransform({
-      scale: this.pinchZoomLeft.scale,
-      x: this.pinchZoomLeft.x,
-      y: this.pinchZoomLeft.y,
-    });
+    for (let i = 1; i < 4; i++) {
+      if (this.pinchZooms[i]) {
+        this.pinchZooms[i]!.setTransform({
+          scale: mainPinchZoom.scale,
+          x: mainPinchZoom.x,
+          y: mainPinchZoom.y,
+        });
+      }
+    }
   };
 
-  /**
-   * We're using two pinch zoom elements, but we want them to stay in sync. When one moves, we
-   * update the position of the other. However, this is tricky when it comes to multi-touch, when
-   * one finger is on one pinch-zoom, and the other finger is on the other. To overcome this, we
-   * redirect all relevant pointer/touch/mouse events to the first pinch zoom element.
-   *
-   * @param event Event to redirect
-   */
+  private isFourUpHandle(targetEl: HTMLElement): boolean {
+    return !!(
+      targetEl.closest(`.${fourUpHorizontalHandle}`) ||
+      targetEl.closest(`.${fourUpVerticalHandle}`) ||
+      targetEl.closest(`.${fourUpCenterHandle}`)
+    );
+  }
+
   private onRetargetableEvent = (event: Event) => {
     const targetEl = event.target as HTMLElement;
-    if (!this.pinchZoomLeft) throw Error('Missing pinch-zoom element');
-    // If the event is on the handle of the two-up, let it through,
-    // unless it's a wheel event, in which case always let it through.
-    if (event.type !== 'wheel' && targetEl.closest(`.${twoUpHandle}`)) return;
-    // If we've already retargeted this event, let it through.
+    if (!this.pinchZooms[0]) throw Error('Missing pinch-zoom element');
+    if (event.type !== 'wheel' && this.isFourUpHandle(targetEl)) return;
     if (this.retargetedEvents.has(event)) return;
-    // Stop the event in its tracks.
     event.stopImmediatePropagation();
     event.preventDefault();
-    // Clone the event & dispatch
-    // Some TypeScript trickery needed due to https://github.com/Microsoft/TypeScript/issues/3841
     const clonedEvent = new (event.constructor as typeof Event)(
       event.type,
       event,
     );
     this.retargetedEvents.add(clonedEvent);
-    this.pinchZoomLeft.dispatchEvent(clonedEvent);
+    this.pinchZooms[0].dispatchEvent(clonedEvent);
 
-    // Unfocus any active element on touchend. This fixes an issue on (at least) Android Chrome,
-    // where the software keyboard is hidden, but the input remains focused, then after interaction
-    // with this element the keyboard reappears for NO GOOD REASON. Thanks Android.
     if (
       event.type === 'touchend' &&
       document.activeElement &&
@@ -263,12 +261,10 @@ export default class Output extends Component<Props, State> {
   };
 
   render(
-    { mobileView, leftImgContain, rightImgContain, source }: Props,
+    { mobileView, source, quadrants }: Props,
     { scale, editingScale, altBackground, aliasing }: State,
   ) {
-    const leftDraw = this.leftDrawable();
-    const rightDraw = this.rightDrawable();
-    // To keep position stable, the output is put in a square using the longest dimension.
+    const drawables = quadrants.map((_, i) => this.drawable(i as QuadrantIndex));
     const originalImage = source && source.preprocessed;
 
     return (
@@ -276,60 +272,41 @@ export default class Output extends Component<Props, State> {
         <div
           class={`${style.output} ${altBackground ? style.altBackground : ''}`}
         >
-          <two-up
+          <four-up
             legacy-clip-compat
-            class={style.twoUp}
-            orientation={mobileView ? 'vertical' : 'horizontal'}
-            // Event redirecting. See onRetargetableEvent.
+            class={style.fourUp}
             onTouchStartCapture={this.onRetargetableEvent}
             onTouchEndCapture={this.onRetargetableEvent}
             onTouchMoveCapture={this.onRetargetableEvent}
             onPointerDownCapture={
-              // We avoid pointer events in our PinchZoom due to a Safari bug.
-              // That means we also need to avoid them here too, else we end up preventing the fallback mouse events.
               isSafari ? undefined : this.onRetargetableEvent
             }
             onMouseDownCapture={this.onRetargetableEvent}
             onWheelCapture={this.onRetargetableEvent}
           >
-            <pinch-zoom
-              class={style.pinchZoom}
-              onChange={this.onPinchZoomLeftChange}
-              ref={linkRef(this, 'pinchZoomLeft')}
-            >
-              <canvas
-                class={`${style.pinchTarget} ${
-                  aliasing ? style.pixelated : ''
-                }`}
-                ref={linkRef(this, 'canvasLeft')}
-                width={leftDraw && leftDraw.width}
-                height={leftDraw && leftDraw.height}
-                style={{
-                  width: originalImage ? originalImage.width : '',
-                  height: originalImage ? originalImage.height : '',
-                  objectFit: leftImgContain ? 'contain' : '',
-                }}
-              />
-            </pinch-zoom>
-            <pinch-zoom
-              class={style.pinchZoom}
-              ref={linkRef(this, 'pinchZoomRight')}
-            >
-              <canvas
-                class={`${style.pinchTarget} ${
-                  aliasing ? style.pixelated : ''
-                }`}
-                ref={linkRef(this, 'canvasRight')}
-                width={rightDraw && rightDraw.width}
-                height={rightDraw && rightDraw.height}
-                style={{
-                  width: originalImage ? originalImage.width : '',
-                  height: originalImage ? originalImage.height : '',
-                  objectFit: rightImgContain ? 'contain' : '',
-                }}
-              />
-            </pinch-zoom>
-          </two-up>
+            {[0, 1, 2, 3].map((i) => (
+              <pinch-zoom
+                key={i}
+                class={style.pinchZoom}
+                onChange={i === 0 ? this.onPinchZoomChange : undefined}
+                ref={linkRef(this, `pinchZooms.${i}`)}
+              >
+                <canvas
+                  class={`${style.pinchTarget} ${
+                    aliasing ? style.pixelated : ''
+                  }`}
+                  ref={linkRef(this, `canvases.${i}`)}
+                  width={drawables[i] && drawables[i]!.width}
+                  height={drawables[i] && drawables[i]!.height}
+                  style={{
+                    width: originalImage ? originalImage.width : '',
+                    height: originalImage ? originalImage.height : '',
+                    objectFit: quadrants[i].imgContain ? 'contain' : '',
+                  }}
+                />
+              </pinch-zoom>
+            ))}
+          </four-up>
         </div>
         <div class={style.controls}>
           <div class={style.buttonGroup}>

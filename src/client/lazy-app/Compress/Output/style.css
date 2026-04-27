@@ -22,6 +22,10 @@
   composes: abs-fill from global;
 }
 
+.four-up {
+  composes: abs-fill from global;
+}
+
 .pinch-zoom {
   composes: abs-fill from global;
   outline: none;
