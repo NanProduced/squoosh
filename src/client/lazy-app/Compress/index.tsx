@@ -37,6 +37,7 @@ import {
   Preset,
   applyPresetToSideSettings,
   hydratePresetData,
+  deepMergeDefaults,
 } from 'client/lazy-app/preset-manager';
 
 export type OutputType = EncoderType | 'identity';
@@ -584,7 +585,7 @@ export default class Compress extends Component<Props, State> {
     preset: Preset,
     side: 'left' | 'right' | 'both',
   ) => {
-    const { source, sides } = this.state;
+    const { source, sides, preprocessorState } = this.state;
     const hydratedData = hydratePresetData(preset.data);
 
     if (hydratedData.processorState?.resize?.enabled && source) {
@@ -620,7 +621,19 @@ export default class Compress extends Component<Props, State> {
       newSides = cleanSet(newSides, `${index}.latestSettings`, newSettings);
     }
 
-    this.setState({ sides: newSides });
+    if (hydratedData.preprocessorState) {
+      const mergedPreprocessorState = deepMergeDefaults(
+        hydratedData.preprocessorState as Record<string, unknown>,
+        preprocessorState as unknown as Record<string, unknown>,
+      ) as unknown as PreprocessorState;
+
+      this.setState({
+        sides: newSides,
+        preprocessorState: mergedPreprocessorState,
+      });
+    } else {
+      this.setState({ sides: newSides });
+    }
     this.queueUpdateImage({ immediate: true });
   };
 

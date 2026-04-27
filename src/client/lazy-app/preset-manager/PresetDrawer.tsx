@@ -37,6 +37,7 @@ interface Props {
 interface State {
   presets: Preset[];
   editingPreset: Preset | null;
+  isCreatingNew: boolean;
   newPresetName: string;
   saveSide: 'left' | 'right';
   loading: boolean;
@@ -194,6 +195,7 @@ export default class PresetDrawer extends Component<Props, State> {
   state: State = {
     presets: [],
     editingPreset: null,
+    isCreatingNew: false,
     newPresetName: '',
     saveSide: 'left',
     loading: true,
@@ -277,13 +279,16 @@ export default class PresetDrawer extends Component<Props, State> {
   private handleStartSave = () => {
     this.setState({
       editingPreset: null,
+      isCreatingNew: true,
       newPresetName: '',
+      saveSide: 'left',
     });
   };
 
   private handleStartEdit = (preset: Preset) => {
     this.setState({
       editingPreset: preset,
+      isCreatingNew: false,
       newPresetName: preset.name,
     });
   };
@@ -291,6 +296,7 @@ export default class PresetDrawer extends Component<Props, State> {
   private handleCancelEdit = () => {
     this.setState({
       editingPreset: null,
+      isCreatingNew: false,
       newPresetName: '',
     });
   };
@@ -332,6 +338,7 @@ export default class PresetDrawer extends Component<Props, State> {
       await this.loadPresets();
       this.setState({
         editingPreset: null,
+        isCreatingNew: false,
         newPresetName: '',
       });
 
@@ -402,6 +409,7 @@ export default class PresetDrawer extends Component<Props, State> {
     {
       presets,
       editingPreset,
+      isCreatingNew,
       newPresetName,
       saveSide,
       loading,
@@ -411,7 +419,7 @@ export default class PresetDrawer extends Component<Props, State> {
   ) {
     const builtInPresets = presets.filter((p) => p.isBuiltIn);
     const customPresets = presets.filter((p) => !p.isBuiltIn);
-    const isEditing = editingPreset !== null || newPresetName !== '';
+    const isEditing = editingPreset !== null || isCreatingNew;
 
     return (
       <div
