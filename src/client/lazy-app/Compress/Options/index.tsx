@@ -316,71 +316,102 @@ export default class Options extends Component<Props, State> {
             <h3 class={style.optionsTitle}>Metadata</h3>
             <form onSubmit={preventDefault}>
               {!canSaveMetadata ? (
-                <div class={style.optionToggle}>
-                  <p class={style.metadataInfo}>
-                    <span class={style.metadataDisabled}>
-                      This format does not support metadata preservation.
-                    </span>
-                    <br />
-                    <small class={style.metadataHint}>
-                      Only JPEG (MozJPEG, Browser JPEG) and WebP formats 
-                      support EXIF, ICC, and XMP metadata.
-                    </small>
-                  </p>
-                </div>
-              ) : (
-                <div>
-                  {hasSourceMetadata && (
-                    <p class={style.metadataHint}>
-                      Source image contains:
-                      {source!.metadata.exif && ' EXIF'}
-                      {source!.metadata.icc && ' ICC'}
-                      {source!.metadata.xmp && ' XMP'}
-                    </p>
-                  )}
-                  <label class={style.optionToggle}>
-                    Keep EXIF data
-                    <Checkbox
-                      name="keepExif"
-                      checked={metadataOptions.keepExif}
-                      onChange={this.onMetadataOptionsChange}
-                      disabled={!source?.metadata.exif}
-                    />
-                  </label>
-                  <label class={style.optionToggle}>
-                    Keep ICC color profile
-                    <Checkbox
-                      name="keepIcc"
-                      checked={metadataOptions.keepIcc}
-                      onChange={this.onMetadataOptionsChange}
-                      disabled={!source?.metadata.icc}
-                    />
-                  </label>
-                  <label class={style.optionToggle}>
-                    Keep XMP metadata
-                    <Checkbox
-                      name="keepXmp"
-                      checked={metadataOptions.keepXmp}
-                      onChange={this.onMetadataOptionsChange}
-                      disabled={!source?.metadata.xmp}
-                    />
-                  </label>
-                  <label class={style.optionToggle}>
-                    Auto rotate (by EXIF orientation)
-                    <Checkbox
-                      name="autoRotate"
-                      checked={metadataOptions.autoRotate}
-                      onChange={this.onMetadataOptionsChange}
-                      disabled={!source?.metadata.orientation || source.metadata.orientation === 1}
-                    />
-                  </label>
-                  {source?.metadata.orientation && source.metadata.orientation !== 1 && (
-                    <p class={style.metadataHint}>
-                      Current orientation: {source.metadata.orientation} 
-                      (needs {getOrientationDegrees(source.metadata.orientation)}° rotation)
-                    </p>
-                  )}
-                </div>
+                <p class={style.metadataHint}>
+                  <span class={style.metadataDisabled}>
+                    This format does not support metadata preservation.
+                  </span>
+                  <br />
+                  <small>
+                    Only JPEG (MozJPEG, Browser JPEG) and WebP formats 
+                    support EXIF, ICC, and XMP metadata.
+                  </small>
+                </p>
+              ) : hasSourceMetadata ? (
+                <p class={style.metadataHint}>
+                  Source image contains:
+                  {source!.metadata.exif && ' EXIF'}
+                  {source!.metadata.icc && ' ICC'}
+                  {source!.metadata.xmp && ' XMP'}
+                </p>
+              ) : null}
+              
+              <label 
+                class={style.optionToggle}
+                title={
+                  !canSaveMetadata 
+                    ? 'This output format does not support EXIF metadata.'
+                    : !source?.metadata.exif
+                    ? 'Source image does not contain EXIF data.'
+                    : ''
+                }
+              >
+                Keep EXIF data
+                <Checkbox
+                  name="keepExif"
+                  checked={metadataOptions.keepExif}
+                  onChange={this.onMetadataOptionsChange}
+                  disabled={!canSaveMetadata || !source?.metadata.exif}
+                />
+              </label>
+              <label 
+                class={style.optionToggle}
+                title={
+                  !canSaveMetadata 
+                    ? 'This output format does not support ICC color profiles.'
+                    : !source?.metadata.icc
+                    ? 'Source image does not contain ICC color profile.'
+                    : ''
+                }
+              >
+                Keep ICC color profile
+                <Checkbox
+                  name="keepIcc"
+                  checked={metadataOptions.keepIcc}
+                  onChange={this.onMetadataOptionsChange}
+                  disabled={!canSaveMetadata || !source?.metadata.icc}
+                />
+              </label>
+              <label 
+                class={style.optionToggle}
+                title={
+                  !canSaveMetadata 
+                    ? 'This output format does not support XMP metadata.'
+                    : !source?.metadata.xmp
+                    ? 'Source image does not contain XMP data.'
+                    : ''
+                }
+              >
+                Keep XMP metadata
+                <Checkbox
+                  name="keepXmp"
+                  checked={metadataOptions.keepXmp}
+                  onChange={this.onMetadataOptionsChange}
+                  disabled={!canSaveMetadata || !source?.metadata.xmp}
+                />
+              </label>
+              <label 
+                class={style.optionToggle}
+                title={
+                  !canSaveMetadata 
+                    ? 'This output format does not support metadata, so auto-rotate is not available.'
+                    : !source?.metadata.orientation || source.metadata.orientation === 1
+                    ? 'Source image is already in normal orientation (no rotation needed).'
+                    : ''
+                }
+              >
+                Auto rotate (by EXIF orientation)
+                <Checkbox
+                  name="autoRotate"
+                  checked={metadataOptions.autoRotate}
+                  onChange={this.onMetadataOptionsChange}
+                  disabled={!canSaveMetadata || !source?.metadata.orientation || source.metadata.orientation === 1}
+                />
+              </label>
+              {source?.metadata.orientation && source.metadata.orientation !== 1 && (
+                <p class={style.metadataHint}>
+                  Current orientation: {source.metadata.orientation} 
+                  (needs {getOrientationDegrees(source.metadata.orientation)}° rotation)
+                </p>
               )}
             </form>
           </section>
