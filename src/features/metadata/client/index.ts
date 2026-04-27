@@ -1,9 +1,12 @@
 /**
  * Client-side metadata utilities.
  * These run in the main thread for binary parsing.
+ * Optimized to minimize memory usage:
+ * - Detection: only read headers, no data copying
+ * - Extraction: only copy data when needed for injection
  */
 
-import { ImageMetadata, MetadataOptions, getMetadataSupport } from '../shared/types';
+import { ImageMetadata, MetadataPresence, MetadataOptions, getMetadataSupport } from '../shared/types';
 
 const SOI = 0xffd8;
 const APP0 = 0xffe0;
@@ -31,6 +34,105 @@ export function isWebP(buffer: ArrayBuffer): boolean {
   return buffer.byteLength >= 12 &&
     view.getUint32(0, true) === RIFF &&
     view.getUint32(8, true) === WEBP;
+}
+
+export function detectMetadataPresence(buffer: ArrayBuffer, mimeType: string): MetadataPresence {
+  if (mimeType === 'image/jpeg' || isJpeg(buffer)) {
+    return detectJpegMetadataPresence(buffer);
+  } else if (mimeType === 'image/webp' || isWebP(buffer)) {
+    return detectWebPMetadataPresence(buffer);
+  }
+  return { hasExif: false, hasIcc: false, hasXmp: false };
+}
+
+function detectJpegMetadataPresence(buffer: ArrayBuffer): MetadataPresence {
+  const presence: MetadataPresence = { hasExif: false, hasIcc: false, hasXmp: false };
+  const view = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+  let offset = 2;
+
+  while (offset < bytes.length - 2) {
+    if (bytes[offset] !== 0xff) {
+      while (offset < bytes.length && bytes[offset] !== 0xff) offset++;
+      if (offset >= bytes.length) break;
+    }
+
+    const marker = view.getUint16(offset, false);
+    offset += 2;
+
+    if (marker >= 0xffd0 && marker <= 0xffd9) {
+      if (marker === 0xffd9) break;
+      continue;
+    }
+
+    if (offset + 2 > bytes.length) break;
+    const length = view.getUint16(offset, false);
+    const segmentEnd = offset + length;
+
+    if (segmentEnd > bytes.length) break;
+
+    if (marker === APP1) {
+      const segmentData = new Uint8Array(buffer, offset + 2, length - 2);
+      if (matchesIdentifier(segmentData, EXIF_IDENTIFIER)) {
+        presence.hasExif = true;
+      } else if (matchesIdentifier(segmentData, XMP_IDENTIFIER)) {
+        presence.hasXmp = true;
+      }
+    } else if (marker === APP2) {
+      const segmentData = new Uint8Array(buffer, offset + 2, length - 2);
+      if (matchesIdentifier(segmentData, ICC_IDENTIFIER)) {
+        presence.hasIcc = true;
+      }
+    } else if (marker === APP13) {
+      if (length > 14) {
+        const segmentData = new Uint8Array(buffer, offset + 2, 12);
+        const photoshopId = String.fromCharCode(...Array.from(segmentData));
+        if (photoshopId === 'Photoshop 3.0') {
+          if (!presence.hasXmp) presence.hasXmp = true;
+        }
+      }
+    }
+
+    if (presence.hasExif && presence.hasIcc && presence.hasXmp) {
+      break;
+    }
+
+    offset = segmentEnd;
+  }
+
+  return presence;
+}
+
+function detectWebPMetadataPresence(buffer: ArrayBuffer): MetadataPresence {
+  const presence: MetadataPresence = { hasExif: false, hasIcc: false, hasXmp: false };
+  const view = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+
+  let offset = 12;
+
+  while (offset < bytes.length - 8) {
+    const fourCC = view.getUint32(offset, true);
+    const size = view.getUint32(offset + 4, true);
+    const paddedSize = (size + 1) & ~1;
+
+    if (offset + 8 + paddedSize > bytes.length) break;
+
+    if (fourCC === EXIF_FOURCC) {
+      presence.hasExif = true;
+    } else if (fourCC === ICCP_FOURCC) {
+      presence.hasIcc = true;
+    } else if (fourCC === XMP_FOURCC) {
+      presence.hasXmp = true;
+    }
+
+    if (presence.hasExif && presence.hasIcc && presence.hasXmp) {
+      break;
+    }
+
+    offset += 8 + paddedSize;
+  }
+
+  return presence;
 }
 
 export function parseMetadataFromBuffer(buffer: ArrayBuffer, mimeType: string): ImageMetadata {
@@ -68,28 +170,25 @@ function parseJpegMetadata(buffer: ArrayBuffer): ImageMetadata {
 
     if (segmentEnd > bytes.length) break;
 
-    const segmentData = bytes.slice(offset + 2, segmentEnd);
-
     if (marker === APP1) {
+      const segmentData = new Uint8Array(buffer, offset + 2, length - 2);
       if (matchesIdentifier(segmentData, EXIF_IDENTIFIER)) {
-        const app1Data = bytes.slice(offset - 2, segmentEnd);
-        metadata.exif = app1Data.buffer.slice(app1Data.byteOffset, app1Data.byteOffset + app1Data.length);
+        metadata.exif = buffer.slice(offset - 2, segmentEnd);
       } else if (matchesIdentifier(segmentData, XMP_IDENTIFIER)) {
-        const app1Data = bytes.slice(offset - 2, segmentEnd);
-        metadata.xmp = app1Data.buffer.slice(app1Data.byteOffset, app1Data.byteOffset + app1Data.length);
+        metadata.xmp = buffer.slice(offset - 2, segmentEnd);
       }
     } else if (marker === APP2) {
+      const segmentData = new Uint8Array(buffer, offset + 2, length - 2);
       if (matchesIdentifier(segmentData, ICC_IDENTIFIER)) {
-        const app2Data = bytes.slice(offset - 2, segmentEnd);
-        metadata.icc = app2Data.buffer.slice(app2Data.byteOffset, app2Data.byteOffset + app2Data.length);
+        metadata.icc = buffer.slice(offset - 2, segmentEnd);
       }
     } else if (marker === APP13) {
-      if (segmentData.length > 12) {
-        const photoshopId = String.fromCharCode(...Array.from(segmentData.slice(0, 12)));
+      if (length > 14) {
+        const segmentData = new Uint8Array(buffer, offset + 2, 12);
+        const photoshopId = String.fromCharCode(...Array.from(segmentData));
         if (photoshopId === 'Photoshop 3.0') {
-          const app13Data = bytes.slice(offset - 2, segmentEnd);
           if (!metadata.xmp) {
-            metadata.xmp = app13Data.buffer.slice(app13Data.byteOffset, app13Data.byteOffset + app13Data.length);
+            metadata.xmp = buffer.slice(offset - 2, segmentEnd);
           }
         }
       }
@@ -115,14 +214,12 @@ function parseWebPMetadata(buffer: ArrayBuffer): ImageMetadata {
 
     if (offset + 8 + paddedSize > bytes.length) break;
 
-    const chunkData = bytes.slice(offset, offset + 8 + size);
-
     if (fourCC === EXIF_FOURCC) {
-      metadata.exif = chunkData.buffer.slice(chunkData.byteOffset, chunkData.byteOffset + chunkData.length);
+      metadata.exif = buffer.slice(offset, offset + 8 + size);
     } else if (fourCC === ICCP_FOURCC) {
-      metadata.icc = chunkData.buffer.slice(chunkData.byteOffset, chunkData.byteOffset + chunkData.length);
+      metadata.icc = buffer.slice(offset, offset + 8 + size);
     } else if (fourCC === XMP_FOURCC) {
-      metadata.xmp = chunkData.buffer.slice(chunkData.byteOffset, chunkData.byteOffset + chunkData.length);
+      metadata.xmp = buffer.slice(offset, offset + 8 + size);
     }
 
     offset += 8 + paddedSize;
