@@ -148,3 +148,53 @@
 .back-x {
   fill: var(--white);
 }
+
+.presetButton {
+  composes: unbutton from global;
+  position: relative;
+  grid-area: header;
+  margin: 9px;
+  justify-self: end;
+  align-self: start;
+  background: linear-gradient(135deg, var(--hot-pink), var(--pink));
+  border-radius: 50%;
+  padding: 12px;
+  width: 47px;
+  height: 47px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+
+  & > svg {
+    width: 24px;
+    height: 24px;
+    overflow: visible;
+    fill: var(--white);
+  }
+
+  &:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(255, 107, 157, 0.4);
+  }
+
+  &:focus {
+    outline: 2px solid var(--deep-blue);
+    outline-offset: 2px;
+  }
+
+  &:active {
+    transform: scale(0.95);
+  }
+
+  @media (min-width: 600px) {
+    margin: 14px;
+    width: 58px;
+    height: 58px;
+
+    & > svg {
+      width: 28px;
+      height: 28px;
+    }
+  }
+}

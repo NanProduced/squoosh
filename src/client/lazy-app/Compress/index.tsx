@@ -32,6 +32,12 @@ import WorkerBridge from '../worker-bridge';
 import { resize } from 'features/processors/resize/client';
 import type SnackBarElement from 'shared/custom-els/snack-bar';
 import { drawableToImageData } from '../util/canvas';
+import PresetDrawer from 'client/lazy-app/preset-manager/PresetDrawer';
+import {
+  Preset,
+  applyPresetToSideSettings,
+  hydratePresetData,
+} from 'client/lazy-app/preset-manager';
 
 export type OutputType = EncoderType | 'identity';
 
@@ -71,6 +77,7 @@ interface State {
   mobileView: boolean;
   preprocessorState: PreprocessorState;
   encodedPreprocessorState?: PreprocessorState;
+  presetDrawerOpen: boolean;
 }
 
 interface MainJob {
@@ -284,6 +291,7 @@ export default class Compress extends Component<Props, State> {
     source: undefined,
     loading: false,
     preprocessorState: defaultPreprocessorState,
+    presetDrawerOpen: false,
     // Tasking catched side settings if available otherwise taking default settings
     sides: [
       localStorage.getItem('leftSideSettings')
@@ -566,6 +574,54 @@ export default class Compress extends Component<Props, State> {
             );
           }) as [Side, Side]),
     }));
+  };
+
+  private onTogglePresetDrawer = () => {
+    this.setState({ presetDrawerOpen: !this.state.presetDrawerOpen });
+  };
+
+  private onApplyPreset = (
+    preset: Preset,
+    side: 'left' | 'right' | 'both',
+  ) => {
+    const { source, sides } = this.state;
+    const hydratedData = hydratePresetData(preset.data);
+
+    if (hydratedData.processorState?.resize?.enabled && source) {
+      const presetWidth = hydratedData.processorState.resize.width;
+      const presetHeight = hydratedData.processorState.resize.height;
+      const actualWidth = source.preprocessed.width;
+      const actualHeight = source.preprocessed.height;
+
+      if (presetWidth !== actualWidth || presetHeight !== actualHeight) {
+        this.props.showSnack(
+          `Preset dimensions (${presetWidth}x${presetHeight}) don't match current image (${actualWidth}x${actualHeight}). Applying anyway.`,
+          { timeout: 4000, actions: ['dismiss'] },
+        );
+      }
+    }
+
+    const indices: (0 | 1)[] =
+      side === 'left' ? [0] : side === 'right' ? [1] : [0, 1];
+
+    let newSides = [...sides] as [Side, Side];
+
+    for (const index of indices) {
+      const currentSettings: {
+        processorState: ProcessorState;
+        encoderState?: EncoderState;
+      } = {
+        processorState: sides[index].latestSettings.processorState,
+        encoderState: sides[index].latestSettings.encoderState,
+      };
+
+      const newSettings = applyPresetToSideSettings(preset, currentSettings);
+
+      newSides = cleanSet(newSides, `${index}.latestSettings`, newSettings);
+    }
+
+    this.setState({ sides: newSides });
+    this.queueUpdateImage({ immediate: true });
   };
 
   /**
@@ -919,8 +975,8 @@ export default class Compress extends Component<Props, State> {
   }
 
   render(
-    { onBack }: Props,
-    { loading, sides, source, mobileView, preprocessorState }: State,
+    { onBack, showSnack }: Props,
+    { loading, sides, source, mobileView, preprocessorState, presetDrawerOpen }: State,
   ) {
     const [leftSide, rightSide] = sides;
     const [leftImageData, rightImageData] = sides.map((i) => i.data);
@@ -994,6 +1050,12 @@ export default class Compress extends Component<Props, State> {
             />
           </svg>
         </button>
+        <button class={style.presetButton} onClick={this.onTogglePresetDrawer}>
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <title>Presets</title>
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
+          </svg>
+        </button>
         {mobileView ? (
           <div class={style.options}>
             <multi-panel class={style.multiPanel} open-one-only>
@@ -1015,6 +1077,17 @@ export default class Compress extends Component<Props, State> {
             </div>,
           ]
         )}
+        <PresetDrawer
+          isOpen={presetDrawerOpen}
+          onClose={this.onTogglePresetDrawer}
+          onApplyPreset={this.onApplyPreset}
+          showSnack={showSnack}
+          currentLeftProcessor={sides[0].latestSettings.processorState}
+          currentLeftEncoder={sides[0].latestSettings.encoderState}
+          currentRightProcessor={sides[1].latestSettings.processorState}
+          currentRightEncoder={sides[1].latestSettings.encoderState}
+          currentPreprocessor={preprocessorState}
+        />
       </div>
     );
   }
