@@ -262,7 +262,7 @@ function createDefaultSide(encoderType: EncoderType): Side {
       encoderState: {
         type: encoderType,
         options: { ...encoderMap[encoderType].meta.defaultOptions },
-      },
+      } as EncoderState,
     },
     loading: false,
     isOptimizing: false,
@@ -856,7 +856,7 @@ export default class Compress extends Component<Props, State> {
       const currentEncoderState: EncoderState = {
         type: encoderState.type,
         options: optionsWithQuality,
-      };
+      } as EncoderState;
 
       const cacheResult = this.encodeCache.match(
         source.preprocessed,
@@ -865,7 +865,7 @@ export default class Compress extends Component<Props, State> {
       );
 
       if (cacheResult) {
-        const ssim = await workerBridge.ssimCalculate(
+        const ssim = await workerBridge.ssim(
           signal,
           source.preprocessed,
           cacheResult.data,
@@ -900,7 +900,7 @@ export default class Compress extends Component<Props, State> {
       const encodeTime = performance.now() - encodeStartTime;
 
       const data = await decodeImage(signal, file, workerBridge);
-      const ssim = await workerBridge.ssimCalculate(
+      const ssim = await workerBridge.ssim(
         signal,
         source.preprocessed,
         data,

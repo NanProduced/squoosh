@@ -10,6 +10,14 @@ export interface SSIMResult {
   meanSSIM: number;
 }
 
+export interface Options {
+  fast: boolean;
+}
+
+export const defaultOptions: Options = {
+  fast: false,
+};
+
 const K1 = 0.01;
 const K2 = 0.03;
 const L = 255;

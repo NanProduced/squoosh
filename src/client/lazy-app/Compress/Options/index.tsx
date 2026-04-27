@@ -5,6 +5,7 @@ import 'add-css:./style.css';
 import { cleanSet, cleanMerge } from '../../util/clean-modify';
 
 import type { SourceImage, OutputType } from '..';
+import { QuadrantIndex } from '../Output';
 import {
   EncoderOptions,
   EncoderState,
@@ -20,17 +21,17 @@ import { Options as ResizeOptionsComponent } from 'features/processors/resize/cl
 import { ImportIcon, SaveIcon, SwapIcon } from 'client/lazy-app/icons';
 
 interface Props {
-  index: 0 | 1;
+  index: QuadrantIndex;
   mobileView: boolean;
   source?: SourceImage;
   encoderState?: EncoderState;
   processorState: ProcessorState;
-  onEncoderTypeChange(index: 0 | 1, newType: OutputType): void;
-  onEncoderOptionsChange(index: 0 | 1, newOptions: EncoderOptions): void;
-  onProcessorOptionsChange(index: 0 | 1, newOptions: ProcessorState): void;
-  onCopyToOtherSideClick(index: 0 | 1): void;
-  onSaveSideSettingsClick(index: 0 | 1): void;
-  onImportSideSettingsClick(index: 0 | 1): void;
+  onEncoderTypeChange(index: QuadrantIndex, newType: OutputType): void;
+  onEncoderOptionsChange(index: QuadrantIndex, newOptions: EncoderOptions): void;
+  onProcessorOptionsChange(index: QuadrantIndex, newOptions: ProcessorState): void;
+  onCopyToOtherSideClick(index: QuadrantIndex): void;
+  onSaveSideSettingsClick(index: QuadrantIndex): void;
+  onImportSideSettingsClick(index: QuadrantIndex): void;
 }
 
 interface State {
