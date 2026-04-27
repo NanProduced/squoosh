@@ -388,3 +388,78 @@ export function createPresetFromSideSettings(
 
   return data;
 }
+
+export interface PresetSummary {
+  formatLabel: string;
+  formatShort: string;
+  quality: number | null;
+  resizeWidth: number | null;
+  resizeHeight: number | null;
+  isResized: boolean;
+  isQuantized: boolean;
+}
+
+export function getPresetSummary(data: PresetData): PresetSummary {
+  const hydrated = hydratePresetData(data);
+
+  let formatLabel = 'Original';
+  let formatShort = 'ORIG';
+  let quality: number | null = null;
+
+  if (hydrated.encoderState?.type) {
+    const encoderType = hydrated.encoderState.type;
+    const encoderMeta = encoderMap[encoderType].meta;
+    formatLabel = encoderMeta.label;
+    formatShort = encoderMeta.label.toUpperCase();
+
+    const options = hydrated.encoderState.options as Record<string, unknown>;
+
+    if (options.quality !== undefined) {
+      quality = options.quality as number;
+    } else if (options.cqLevel !== undefined) {
+      quality = options.cqLevel as number;
+    } else if (options.level !== undefined) {
+      quality = options.level as number;
+    }
+  }
+
+  let resizeWidth: number | null = null;
+  let resizeHeight: number | null = null;
+  let isResized = false;
+
+  if (hydrated.processorState?.resize?.enabled) {
+    isResized = true;
+    resizeWidth = hydrated.processorState.resize.width;
+    resizeHeight = hydrated.processorState.resize.height;
+  }
+
+  const isQuantized = hydrated.processorState?.quantize?.enabled || false;
+
+  return {
+    formatLabel,
+    formatShort,
+    quality,
+    resizeWidth,
+    resizeHeight,
+    isResized,
+    isQuantized,
+  };
+}
+
+const encoderColorMap: Record<string, string> = {
+  mozJPEG: '#FF6B35',
+  browserJPEG: '#FF9500',
+  webP: '#4CAF50',
+  avif: '#00BCD4',
+  oxiPNG: '#9C27B0',
+  browserPNG: '#673AB7',
+  wp2: '#E91E63',
+  jxl: '#3F51B5',
+  qoi: '#FFEB3B',
+  browserGIF: '#FF5722',
+};
+
+export function getEncoderColor(type?: string): string {
+  if (!type) return '#666666';
+  return encoderColorMap[type] || '#666666';
+}

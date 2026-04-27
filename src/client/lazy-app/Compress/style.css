@@ -157,25 +157,31 @@
   justify-self: end;
   align-self: start;
   background: linear-gradient(135deg, var(--hot-pink), var(--pink));
-  border-radius: 50%;
-  padding: 12px;
-  width: 47px;
-  height: 47px;
+  border-radius: 12px;
+  padding: 10px 16px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  gap: 8px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 
   & > svg {
-    width: 24px;
-    height: 24px;
+    width: 20px;
+    height: 20px;
     overflow: visible;
     fill: var(--white);
+    flex-shrink: 0;
+  }
+
+  & > span {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--white);
+    line-height: 1;
   }
 
   &:hover {
-    transform: scale(1.05);
-    box-shadow: 0 4px 12px rgba(255, 107, 157, 0.4);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(255, 107, 157, 0.4);
   }
 
   &:focus {
@@ -184,17 +190,21 @@
   }
 
   &:active {
-    transform: scale(0.95);
+    transform: translateY(0);
   }
 
   @media (min-width: 600px) {
     margin: 14px;
-    width: 58px;
-    height: 58px;
+    padding: 12px 20px;
+    border-radius: 14px;
 
     & > svg {
-      width: 28px;
-      height: 28px;
+      width: 24px;
+      height: 24px;
+    }
+
+    & > span {
+      font-size: 1rem;
     }
   }
 }
