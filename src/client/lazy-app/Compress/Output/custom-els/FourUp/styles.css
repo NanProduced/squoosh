@@ -1,0 +1,144 @@
+four-up {
+  display: grid;
+  position: relative;
+  --horizontal-split: 0;
+  --vertical-split: 0;
+  --track-color: rgb(0 0 0 / 0.6);
+  --thumb-background: var(--black);
+  --thumb-color: var(--accent-color);
+  --thumb-size: 62px;
+  --bar-size: 9px;
+  --bar-touch-size: 30px;
+}
+
+four-up > * {
+  grid-area: 1/1;
+}
+
+four-up[legacy-clip-compat] > :not(.four-up-horizontal-handle):not(.four-up-vertical-handle):not(.four-up-center-handle) {
+  position: absolute;
+}
+
+.four-up-horizontal-handle {
+  touch-action: none;
+  position: relative;
+  height: var(--bar-touch-size);
+  transform: translateY(var(--horizontal-split)) translateY(-50%);
+  will-change: transform;
+  cursor: ns-resize;
+  z-index: 10;
+}
+
+.four-up-horizontal-handle::before {
+  content: '';
+  display: block;
+  width: 100%;
+  height: var(--bar-size);
+  margin: calc((var(--bar-touch-size) - var(--bar-size)) / 2) 0 0 0;
+  background: var(--track-color);
+  box-shadow: inset 0 calc(var(--bar-size) / 2) 0 rgba(0, 0, 0, 0.1),
+    0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+.four-up-vertical-handle {
+  touch-action: none;
+  position: relative;
+  width: var(--bar-touch-size);
+  transform: translateX(var(--vertical-split)) translateX(-50%);
+  will-change: transform;
+  cursor: ew-resize;
+  z-index: 10;
+}
+
+.four-up-vertical-handle::before {
+  content: '';
+  display: block;
+  height: 100%;
+  width: var(--bar-size);
+  margin: 0 auto;
+  background: var(--track-color);
+}
+
+.four-up-center-handle {
+  touch-action: none;
+  position: absolute;
+  width: var(--thumb-size);
+  height: var(--thumb-size);
+  transform: translate(
+    calc(var(--vertical-split) - 50%),
+    calc(var(--horizontal-split) - 50%)
+  );
+  will-change: transform;
+  cursor: move;
+  z-index: 20;
+}
+
+.scrubber {
+  display: grid;
+  align-content: center;
+  justify-content: center;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: var(--thumb-size);
+  height: var(--thumb-size);
+  background: var(--thumb-background);
+  border-radius: var(--thumb-size);
+  color: var(--thumb-color);
+  box-sizing: border-box;
+  padding: calc(var(--thumb-size) * 0.15);
+  box-shadow: 1px 0 4px rgba(0, 0, 0, 0.1);
+}
+
+.scrubber svg {
+  width: 100%;
+  height: 100%;
+}
+
+.arrow-top,
+.arrow-bottom,
+.arrow-left,
+.arrow-right {
+  fill: var(--pink);
+}
+
+four-up > :nth-child(1):not(.four-up-horizontal-handle):not(.four-up-vertical-handle):not(.four-up-center-handle) {
+  -webkit-clip-path: inset(0 calc(100% - var(--vertical-split)) calc(100% - var(--horizontal-split)) 0);
+  clip-path: inset(0 calc(100% - var(--vertical-split)) calc(100% - var(--horizontal-split)) 0);
+}
+
+four-up > :nth-child(2):not(.four-up-horizontal-handle):not(.four-up-vertical-handle):not(.four-up-center-handle) {
+  -webkit-clip-path: inset(0 0 calc(100% - var(--horizontal-split)) var(--vertical-split));
+  clip-path: inset(0 0 calc(100% - var(--horizontal-split)) var(--vertical-split));
+}
+
+four-up > :nth-child(3):not(.four-up-horizontal-handle):not(.four-up-vertical-handle):not(.four-up-center-handle) {
+  -webkit-clip-path: inset(var(--horizontal-split) calc(100% - var(--vertical-split)) 0 0);
+  clip-path: inset(var(--horizontal-split) calc(100% - var(--vertical-split)) 0 0);
+}
+
+four-up > :nth-child(4):not(.four-up-horizontal-handle):not(.four-up-vertical-handle):not(.four-up-center-handle) {
+  -webkit-clip-path: inset(var(--horizontal-split) 0 0 var(--vertical-split));
+  clip-path: inset(var(--horizontal-split) 0 0 var(--vertical-split));
+}
+
+@supports not (
+  (clip-path: inset(0 0 0 0)) or (-webkit-clip-path: inset(0 0 0 0))
+) {
+  four-up[legacy-clip-compat] > :nth-child(1):not(.four-up-horizontal-handle):not(.four-up-vertical-handle):not(.four-up-center-handle) {
+    clip: rect(auto var(--vertical-split) var(--horizontal-split) auto);
+  }
+
+  four-up[legacy-clip-compat] > :nth-child(2):not(.four-up-horizontal-handle):not(.four-up-vertical-handle):not(.four-up-center-handle) {
+    clip: rect(auto auto var(--horizontal-split) var(--vertical-split));
+  }
+
+  four-up[legacy-clip-compat] > :nth-child(3):not(.four-up-horizontal-handle):not(.four-up-vertical-handle):not(.four-up-center-handle) {
+    clip: rect(var(--horizontal-split) var(--vertical-split) auto auto);
+  }
+
+  four-up[legacy-clip-compat] > :nth-child(4):not(.four-up-horizontal-handle):not(.four-up-vertical-handle):not(.four-up-center-handle) {
+    clip: rect(var(--horizontal-split) auto auto var(--vertical-split));
+  }
+}
