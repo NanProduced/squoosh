@@ -12,6 +12,21 @@ import 'shared/custom-els/snack-bar';
 import Intro from 'shared/prerendered-app/Intro';
 import 'shared/custom-els/loading-spinner';
 
+import { get, set, del, createStore } from 'idb-keyval';
+import {
+  RecentFileMetadata,
+  fetchWithLimits,
+  createPreview,
+  isValidUrl,
+  extractUrlsFromDragEvent,
+  extractFilesFromDragEvent,
+} from 'client/lazy-app/util/import-utils';
+
+const RECENT_FILES_KEY = 'squoosh-recent-files';
+const MAX_RECENT_FILES = 10;
+
+const recentFilesStore = createStore('squoosh-db', 'recent-files');
+
 const ROUTE_EDITOR = '/editor';
 
 const compressPromise = import('client/lazy-app/Compress');
@@ -28,6 +43,8 @@ interface State {
   file?: File;
   isEditorOpen: Boolean;
   Compress?: typeof import('client/lazy-app/Compress').default;
+  recentFiles: RecentFileMetadata[];
+  isLoadingRecentFiles: boolean;
 }
 
 export default class App extends Component<Props, State> {
@@ -38,9 +55,12 @@ export default class App extends Component<Props, State> {
     isEditorOpen: false,
     file: undefined,
     Compress: undefined,
+    recentFiles: [],
+    isLoadingRecentFiles: true,
   };
 
   snackbar?: SnackBarElement;
+  private abortController?: AbortController;
 
   constructor() {
     super();
@@ -57,33 +77,177 @@ export default class App extends Component<Props, State> {
       offliner(this.showSnack);
       if (!this.state.awaitingShareTarget) return;
       const file = await getSharedImage();
-      // Remove the ?share-target from the URL
       history.replaceState('', '', '/');
       this.openEditor();
       this.setState({ file, awaitingShareTarget: false });
     });
 
-    // Since iOS 10, Apple tries to prevent disabling pinch-zoom. This is great in theory, but
-    // really breaks things on Squoosh, as you can easily end up zooming the UI when you mean to
-    // zoom the image. Once you've done this, it's really difficult to undo. Anyway, this seems to
-    // prevent it.
     document.body.addEventListener('gesturestart', (event: any) => {
       event.preventDefault();
     });
 
     window.addEventListener('popstate', this.onPopState);
+
+    this.loadRecentFiles();
   }
 
-  private onFileDrop = ({ files }: FileDropEvent) => {
-    if (!files || files.length === 0) return;
-    const file = files[0];
-    this.openEditor();
-    this.setState({ file });
+  componentWillUnmount() {
+    window.removeEventListener('popstate', this.onPopState);
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+  }
+
+  private loadRecentFiles = async (): Promise<void> => {
+    try {
+      const serialized = await get<string | undefined>(RECENT_FILES_KEY, recentFilesStore);
+      
+      if (!serialized) {
+        this.setState({ isLoadingRecentFiles: false });
+        return;
+      }
+
+      const files: RecentFileMetadata[] = JSON.parse(serialized);
+      
+      const validFiles = files.filter((file) => 
+        file.url && file.filename && file.mimeType && file.timestamp
+      );
+
+      this.setState({ 
+        recentFiles: validFiles.slice(0, MAX_RECENT_FILES),
+        isLoadingRecentFiles: false 
+      });
+    } catch {
+      this.setState({ isLoadingRecentFiles: false });
+    }
   };
 
-  private onIntroPickFile = (file: File) => {
+  private saveRecentFile = async (metadata: RecentFileMetadata): Promise<void> => {
+    try {
+      const { recentFiles } = this.state;
+      
+      const existingIndex = recentFiles.findIndex((f) => f.url === metadata.url);
+      
+      let updatedFiles: RecentFileMetadata[];
+      
+      if (existingIndex >= 0) {
+        updatedFiles = [
+          metadata,
+          ...recentFiles.slice(0, existingIndex),
+          ...recentFiles.slice(existingIndex + 1),
+        ];
+      } else {
+        updatedFiles = [metadata, ...recentFiles];
+      }
+      
+      updatedFiles = updatedFiles.slice(0, MAX_RECENT_FILES);
+      
+      this.setState({ recentFiles: updatedFiles });
+      
+      await set(RECENT_FILES_KEY, JSON.stringify(updatedFiles), recentFilesStore);
+    } catch {
+      // 静默失败，不影响用户体验
+    }
+  };
+
+  private addToRecentFiles = async (url: string, file: File): Promise<void> => {
+    try {
+      const previewDataUrl = await createPreview(file, 200, 200);
+      
+      const metadata: RecentFileMetadata = {
+        url,
+        filename: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        size: file.size,
+        timestamp: Date.now(),
+        previewDataUrl,
+      };
+      
+      await this.saveRecentFile(metadata);
+    } catch {
+      // 静默失败
+    }
+  };
+
+  private onFileDrop = async (event: Event): Promise<void> => {
+    const dragEvent = event as unknown as DragEvent;
+    
+    const files = extractFilesFromDragEvent(dragEvent);
+    if (files.length > 0) {
+      const file = files[0];
+      this.openEditor();
+      this.setState({ file });
+      await this.addToRecentFiles(`file://${file.name}`, file);
+      return;
+    }
+    
+    const urls = extractUrlsFromDragEvent(dragEvent);
+    if (urls.length > 0) {
+      await this.fetchAndOpenUrl(urls[0]);
+      return;
+    }
+    
+    const fileDropEvent = event as FileDropEvent;
+    if (fileDropEvent.files && fileDropEvent.files.length > 0) {
+      const file = fileDropEvent.files[0];
+      this.openEditor();
+      this.setState({ file });
+      await this.addToRecentFiles(`file://${file.name}`, file);
+    }
+  };
+
+  private onIntroPickFile = async (file: File): Promise<void> => {
     this.openEditor();
     this.setState({ file });
+    await this.addToRecentFiles(`file://${file.name}`, file);
+  };
+
+  private onUrlImport = async (url: string, file: File): Promise<void> => {
+    this.openEditor();
+    this.setState({ file });
+    await this.addToRecentFiles(url, file);
+  };
+
+  private onRecentFileClick = async (metadata: RecentFileMetadata): Promise<void> => {
+    if (isValidUrl(metadata.url)) {
+      await this.fetchAndOpenUrl(metadata.url);
+    } else if (metadata.url.startsWith('file://')) {
+      this.showSnack('Local file paths cannot be reloaded. Please select the file again.');
+    } else {
+      this.showSnack('Cannot reload this file. Please select the file again.');
+    }
+  };
+
+  private fetchAndOpenUrl = async (url: string): Promise<void> => {
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+
+    this.abortController = new AbortController();
+
+    try {
+      const blob = await fetchWithLimits(url, {
+        signal: this.abortController.signal,
+      });
+
+      if (!blob.type.startsWith('image/')) {
+        this.showSnack('The URL does not point to a valid image');
+        return;
+      }
+
+      const pathname = new URL(url).pathname;
+      const filename = pathname.split('/').pop() || 'image.unknown';
+      const file = new File([blob], filename, { type: blob.type });
+
+      this.openEditor();
+      this.setState({ file });
+      await this.addToRecentFiles(url, file);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return;
+      }
+      this.showSnack(err instanceof Error ? err.message : 'Failed to fetch image from URL');
+    }
   };
 
   private showSnack = (
@@ -100,7 +264,6 @@ export default class App extends Component<Props, State> {
 
   private openEditor = () => {
     if (this.state.isEditorOpen) return;
-    // Change path, but preserve query string.
     const editorURL = new URL(location.href);
     editorURL.pathname = ROUTE_EDITOR;
     history.pushState(null, '', editorURL.href);
@@ -109,7 +272,7 @@ export default class App extends Component<Props, State> {
 
   render(
     {}: Props,
-    { file, isEditorOpen, Compress, awaitingShareTarget }: State,
+    { file, isEditorOpen, Compress, awaitingShareTarget, recentFiles, isLoadingRecentFiles }: State,
   ) {
     const showSpinner = awaitingShareTarget || (isEditorOpen && !Compress);
 
@@ -123,7 +286,13 @@ export default class App extends Component<Props, State> {
               <Compress file={file!} showSnack={this.showSnack} onBack={back} />
             )
           ) : (
-            <Intro onFile={this.onIntroPickFile} showSnack={this.showSnack} />
+            <Intro 
+              onFile={this.onIntroPickFile} 
+              onUrlImport={this.onUrlImport}
+              showSnack={this.showSnack}
+              recentFiles={isLoadingRecentFiles ? [] : recentFiles}
+              onRecentFileClick={this.onRecentFileClick}
+            />
           )}
           <snack-bar ref={linkRef(this, 'snackbar')} />
         </file-drop>

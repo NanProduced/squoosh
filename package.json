@@ -9,7 +9,9 @@
     "dev": "run-p watch serve",
     "watch": "rollup -cw",
     "serve": "serve --listen=5000 --config ../../../serve.json .tmp/build/static",
-    "prepare": "husky install"
+    "prepare": "husky install",
+    "test": "jest",
+    "test:watch": "jest --watch"
   },
   "devDependencies": {
     "@rollup/plugin-commonjs": "^17.0.0",
@@ -18,6 +20,7 @@
     "@rollup/plugin-terser": "^0.4.4",
     "@surma/rollup-plugin-off-main-thread": "^2.2.2",
     "@types/dedent": "^0.7.0",
+    "@types/jest": "^30.0.0",
     "@types/mime-types": "^2.1.1",
     "@types/node": "^16.11.1",
     "@web/rollup-plugin-import-meta-assets": "^1.0.6",
@@ -29,6 +32,7 @@
     "husky": "^7.0.2",
     "idb-keyval": "^3.2.0",
     "image-size": "^0.9.3",
+    "jest": "^30.3.0",
     "linkstate": "^2.0.0",
     "lint-staged": "^10.5.1",
     "lodash.camelcase": "^4.3.0",
@@ -45,6 +49,7 @@
     "prettier": "^2.4.1",
     "rollup": "^2.79.1",
     "serve": "^11.3.2",
+    "ts-jest": "^29.4.9",
     "typescript": "^4.4.4",
     "wasm-feature-detect": "^1.2.11",
     "which": "^2.0.2"
