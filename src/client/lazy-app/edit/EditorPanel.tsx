@@ -2,7 +2,7 @@
  * Image Editor Panel Component
  * Provides crop, rotate, flip, and filter adjustments
  */
-import { h, Component } from 'preact';
+import { h } from 'preact';
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 
 import * as style from './style.css';
@@ -16,8 +16,6 @@ import {
   FiltersState,
   CropRatio,
   cropRatios,
-  defaultOptions,
-  EditCommand,
 } from 'features/preprocessors/edit/shared/meta';
 
 import {
@@ -34,6 +32,7 @@ import {
 } from 'client/lazy-app/icons';
 
 type EditorTab = 'transform' | 'crop' | 'filters';
+type CropHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'move' | null;
 
 interface EditorPanelProps {
   isOpen: boolean;
@@ -47,6 +46,26 @@ interface EditorPanelProps {
   onOptionsChange: (options: Partial<Options>) => void;
   onUndo: () => void;
   onRedo: () => void;
+}
+
+interface CanvasBuffer {
+  canvas: OffscreenCanvas;
+  ctx: OffscreenCanvasRenderingContext2D;
+}
+
+function getOrCreateBuffer(
+  ref: { current: CanvasBuffer | null },
+  width: number,
+  height: number
+): CanvasBuffer {
+  if (!ref.current || ref.current.canvas.width < width || ref.current.canvas.height < height) {
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+    ref.current = { canvas, ctx };
+  }
+  ref.current.canvas.width = width;
+  ref.current.canvas.height = height;
+  return ref.current;
 }
 
 function EditorPanel({
@@ -64,8 +83,42 @@ function EditorPanel({
 }: EditorPanelProps) {
   const [activeTab, setActiveTab] = useState<EditorTab>('transform');
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const offscreenCanvasRef = useRef<OffscreenCanvas | null>(null);
+  const bufferARef = useRef<CanvasBuffer | null>(null);
+  const bufferBRef = useRef<CanvasBuffer | null>(null);
   const [isRendering, setIsRendering] = useState(false);
+  
+  const [displayScale, setDisplayScale] = useState(1);
+  const [displayOffsetX, setDisplayOffsetX] = useState(0);
+  const [displayOffsetY, setDisplayOffsetY] = useState(0);
+  
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragHandle, setDragHandle] = useState<CropHandle>(null);
+  const [dragStartX, setDragStartX] = useState(0);
+  const [dragStartY, setDragStartY] = useState(0);
+  const [dragStartCrop, setDragStartCrop] = useState<CropState | null>(null);
+
+  const getTransformedDimensions = useCallback(() => {
+    if (!originalImage) return { width: 0, height: 0 };
+    const isOddRotation = options.rotate.rotate === 90 || options.rotate.rotate === 270;
+    return {
+      width: isOddRotation ? originalImage.height : originalImage.width,
+      height: isOddRotation ? originalImage.width : originalImage.height,
+    };
+  }, [originalImage, options.rotate.rotate]);
+
+  const imageToDisplay = useCallback((imgX: number, imgY: number) => {
+    return {
+      x: displayOffsetX + imgX * displayScale,
+      y: displayOffsetY + imgY * displayScale,
+    };
+  }, [displayOffsetX, displayOffsetY, displayScale]);
+
+  const displayToImage = useCallback((dispX: number, dispY: number) => {
+    return {
+      x: Math.round((dispX - displayOffsetX) / displayScale),
+      y: Math.round((dispY - displayOffsetY) / displayScale),
+    };
+  }, [displayOffsetX, displayOffsetY, displayScale]);
 
   const renderPreview = useCallback(async () => {
     if (!originalImage || !canvasRef.current) return;
@@ -77,63 +130,63 @@ function EditorPanel({
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      if (!offscreenCanvasRef.current) {
-        offscreenCanvasRef.current = new OffscreenCanvas(
-          originalImage.width,
-          originalImage.height
-        );
-      }
+      const dims = getTransformedDimensions();
+      const maxSize = Math.max(window.innerWidth * 0.8, window.innerHeight * 0.6);
+      const newDisplayScale = Math.min(1, maxSize / Math.max(dims.width, dims.height));
+      const displayWidth = Math.floor(dims.width * newDisplayScale);
+      const displayHeight = Math.floor(dims.height * newDisplayScale);
 
-      const offscreenCtx = offscreenCanvasRef.current.getContext('2d');
-      if (!offscreenCtx) return;
+      setDisplayScale(newDisplayScale);
+      setDisplayOffsetX((canvas.width - displayWidth) / 2);
+      setDisplayOffsetY((canvas.height - displayHeight) / 2);
 
-      offscreenCtx.clearRect(0, 0, originalImage.width, originalImage.height);
-      offscreenCtx.putImageData(originalImage, 0, 0);
+      const bufferA = getOrCreateBuffer(bufferARef, originalImage.width, originalImage.height);
+      const bufferB = getOrCreateBuffer(bufferBRef, dims.width, dims.height);
+      
+      bufferA.ctx.clearRect(0, 0, originalImage.width, originalImage.height);
+      bufferA.ctx.putImageData(originalImage, 0, 0);
 
-      let resultCanvas = offscreenCanvasRef.current;
-      let resultCtx = offscreenCtx;
+      let sourceCanvas = bufferA.canvas;
+      let sourceCtx = bufferA.ctx;
+      let resultCanvas: OffscreenCanvas = bufferB.canvas;
+      let resultCtx: OffscreenCanvasRenderingContext2D = bufferB.ctx;
 
       if (options.rotate.rotate !== 0) {
         const angle = options.rotate.rotate;
-        const isOddRotation = angle === 90 || angle === 270;
-        const newWidth = isOddRotation ? originalImage.height : originalImage.width;
-        const newHeight = isOddRotation ? originalImage.width : originalImage.height;
+        const newWidth = dims.width;
+        const newHeight = dims.height;
 
-        const rotatedCanvas = new OffscreenCanvas(newWidth, newHeight);
-        const rotatedCtx = rotatedCanvas.getContext('2d')!;
+        resultCtx.clearRect(0, 0, newWidth, newHeight);
+        resultCtx.save();
+        resultCtx.translate(newWidth / 2, newHeight / 2);
+        resultCtx.rotate((angle * Math.PI) / 180);
+        resultCtx.drawImage(sourceCanvas as any, -originalImage.width / 2, -originalImage.height / 2);
+        resultCtx.restore();
 
-        rotatedCtx.save();
-        rotatedCtx.translate(newWidth / 2, newHeight / 2);
-        rotatedCtx.rotate((angle * Math.PI) / 180);
-        rotatedCtx.drawImage(resultCanvas as any, -originalImage.width / 2, -originalImage.height / 2);
-        rotatedCtx.restore();
-
-        resultCanvas = rotatedCanvas;
-        resultCtx = rotatedCtx;
+        [sourceCanvas, resultCanvas] = [resultCanvas, sourceCanvas];
+        [sourceCtx, resultCtx] = [resultCtx, sourceCtx];
       }
 
       if (options.flip.horizontal || options.flip.vertical) {
-        const flippedCanvas = new OffscreenCanvas(resultCanvas.width, resultCanvas.height);
-        const flippedCtx = flippedCanvas.getContext('2d')!;
-
-        flippedCtx.save();
+        resultCtx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+        resultCtx.save();
 
         if (options.flip.horizontal && options.flip.vertical) {
-          flippedCtx.translate(resultCanvas.width, resultCanvas.height);
-          flippedCtx.scale(-1, -1);
+          resultCtx.translate(sourceCanvas.width, sourceCanvas.height);
+          resultCtx.scale(-1, -1);
         } else if (options.flip.horizontal) {
-          flippedCtx.translate(resultCanvas.width, 0);
-          flippedCtx.scale(-1, 1);
+          resultCtx.translate(sourceCanvas.width, 0);
+          resultCtx.scale(-1, 1);
         } else if (options.flip.vertical) {
-          flippedCtx.translate(0, resultCanvas.height);
-          flippedCtx.scale(1, -1);
+          resultCtx.translate(0, sourceCanvas.height);
+          resultCtx.scale(1, -1);
         }
 
-        flippedCtx.drawImage(resultCanvas as any, 0, 0);
-        flippedCtx.restore();
+        resultCtx.drawImage(sourceCanvas as any, 0, 0);
+        resultCtx.restore();
 
-        resultCanvas = flippedCanvas;
-        resultCtx = flippedCtx;
+        [sourceCanvas, resultCanvas] = [resultCanvas, sourceCanvas];
+        [sourceCtx, resultCtx] = [resultCtx, sourceCtx];
       }
 
       if (options.filters.enabled) {
@@ -156,30 +209,41 @@ function EditorPanel({
           }
 
           if (filterString) {
-            const tempCanvas = new OffscreenCanvas(resultCanvas.width, resultCanvas.height);
-            const tempCtx = tempCanvas.getContext('2d')!;
-            tempCtx.filter = filterString.trim();
-            tempCtx.drawImage(resultCanvas as any, 0, 0);
-            tempCtx.filter = 'none';
-            
-            resultCanvas = tempCanvas;
-            resultCtx = tempCtx;
+            resultCtx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+            resultCtx.filter = filterString.trim();
+            resultCtx.drawImage(sourceCanvas as any, 0, 0);
+            resultCtx.filter = 'none';
+
+            [sourceCanvas, resultCanvas] = [resultCanvas, sourceCanvas];
+            [sourceCtx, resultCtx] = [resultCtx, sourceCtx];
           }
         }
       }
 
+      canvas.width = displayWidth + 40;
+      canvas.height = displayHeight + 40;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const drawOffsetX = (canvas.width - displayWidth) / 2;
+      const drawOffsetY = (canvas.height - displayHeight) / 2;
+      
+      setDisplayOffsetX(drawOffsetX);
+      setDisplayOffsetY(drawOffsetY);
+
       if (options.crop.enabled && options.crop.width > 0 && options.crop.height > 0) {
         const { x, y, width, height } = options.crop;
-        const clampedX = Math.max(0, Math.min(x, resultCanvas.width - 1));
-        const clampedY = Math.max(0, Math.min(y, resultCanvas.height - 1));
-        const clampedWidth = Math.max(1, Math.min(width, resultCanvas.width - clampedX));
-        const clampedHeight = Math.max(1, Math.min(height, resultCanvas.height - clampedY));
+        const clampedX = Math.max(0, Math.min(x, sourceCanvas.width - 1));
+        const clampedY = Math.max(0, Math.min(y, sourceCanvas.height - 1));
+        const clampedWidth = Math.max(1, Math.min(width, sourceCanvas.width - clampedX));
+        const clampedHeight = Math.max(1, Math.min(height, sourceCanvas.height - clampedY));
 
-        const croppedCanvas = new OffscreenCanvas(clampedWidth, clampedHeight);
-        const croppedCtx = croppedCanvas.getContext('2d')!;
-
-        croppedCtx.drawImage(
-          resultCanvas as any,
+        const tempCanvas = new OffscreenCanvas(clampedWidth, clampedHeight);
+        const tempCtx = tempCanvas.getContext('2d')!;
+        
+        tempCtx.drawImage(
+          sourceCanvas as any,
           clampedX,
           clampedY,
           clampedWidth,
@@ -190,32 +254,263 @@ function EditorPanel({
           clampedHeight
         );
 
-        resultCanvas = croppedCanvas;
+        const croppedDisplayWidth = Math.floor(clampedWidth * newDisplayScale);
+        const croppedDisplayHeight = Math.floor(clampedHeight * newDisplayScale);
+        const croppedOffsetX = (canvas.width - croppedDisplayWidth) / 2;
+        const croppedOffsetY = (canvas.height - croppedDisplayHeight) / 2;
+
+        ctx.drawImage(tempCanvas as any, croppedOffsetX, croppedOffsetY, croppedDisplayWidth, croppedDisplayHeight);
+      } else {
+        ctx.drawImage(sourceCanvas as any, drawOffsetX, drawOffsetY, displayWidth, displayHeight);
+
+        if (options.crop.enabled && activeTab === 'crop') {
+          const dims = getTransformedDimensions();
+          const crop = options.crop;
+          
+          let cropX = crop.x;
+          let cropY = crop.y;
+          let cropW = crop.width > 0 ? crop.width : dims.width;
+          let cropH = crop.height > 0 ? crop.height : dims.height;
+
+          if (cropW === 0 || cropH === 0) {
+            cropX = 0;
+            cropY = 0;
+            cropW = dims.width;
+            cropH = dims.height;
+          }
+
+          const topLeft = imageToDisplay(cropX, cropY);
+          const bottomRight = imageToDisplay(cropX + cropW, cropY + cropH);
+          const rectW = bottomRight.x - topLeft.x;
+          const rectH = bottomRight.y - topLeft.y;
+
+          ctx.save();
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(topLeft.x, topLeft.y, rectW, rectH);
+
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+          ctx.fillRect(drawOffsetX, drawOffsetY, displayWidth, topLeft.y - drawOffsetY);
+          ctx.fillRect(drawOffsetX, bottomRight.y, displayWidth, drawOffsetY + displayHeight - bottomRight.y);
+          ctx.fillRect(drawOffsetX, topLeft.y, topLeft.x - drawOffsetX, rectH);
+          ctx.fillRect(bottomRight.x, topLeft.y, drawOffsetX + displayWidth - bottomRight.x, rectH);
+
+          const handleSize = 10;
+          const handlePositions = [
+            { x: topLeft.x, y: topLeft.y, handle: 'nw' as CropHandle },
+            { x: topLeft.x + rectW / 2, y: topLeft.y, handle: 'n' as CropHandle },
+            { x: bottomRight.x, y: topLeft.y, handle: 'ne' as CropHandle },
+            { x: bottomRight.x, y: topLeft.y + rectH / 2, handle: 'e' as CropHandle },
+            { x: bottomRight.x, y: bottomRight.y, handle: 'se' as CropHandle },
+            { x: topLeft.x + rectW / 2, y: bottomRight.y, handle: 's' as CropHandle },
+            { x: topLeft.x, y: bottomRight.y, handle: 'sw' as CropHandle },
+            { x: topLeft.x, y: topLeft.y + rectH / 2, handle: 'w' as CropHandle },
+          ];
+
+          ctx.fillStyle = '#fff';
+          ctx.strokeStyle = '#333';
+          ctx.lineWidth = 1;
+
+          for (const pos of handlePositions) {
+            ctx.fillRect(
+              pos.x - handleSize / 2,
+              pos.y - handleSize / 2,
+              handleSize,
+              handleSize
+            );
+            ctx.strokeRect(
+              pos.x - handleSize / 2,
+              pos.y - handleSize / 2,
+              handleSize,
+              handleSize
+            );
+          }
+
+          ctx.restore();
+        }
       }
-
-      const maxSize = Math.max(window.innerWidth * 0.8, window.innerHeight * 0.6);
-      const scale = Math.min(1, maxSize / Math.max(resultCanvas.width, resultCanvas.height));
-      const displayWidth = Math.floor(resultCanvas.width * scale);
-      const displayHeight = Math.floor(resultCanvas.height * scale);
-
-      canvas.width = displayWidth;
-      canvas.height = displayHeight;
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.clearRect(0, 0, displayWidth, displayHeight);
-      ctx.drawImage(resultCanvas as any, 0, 0, displayWidth, displayHeight);
     } catch (err) {
       console.error('Error rendering preview:', err);
     } finally {
       setIsRendering(false);
     }
-  }, [originalImage, options]);
+  }, [originalImage, options, activeTab, getTransformedDimensions, imageToDisplay]);
+
+  const handleMouseDown = useCallback((e: MouseEvent) => {
+    if (!canvasRef.current || !options.crop.enabled || activeTab !== 'crop') return;
+
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const dims = getTransformedDimensions();
+    const crop = options.crop;
+    
+    let cropX = crop.x;
+    let cropY = crop.y;
+    let cropW = crop.width > 0 ? crop.width : dims.width;
+    let cropH = crop.height > 0 ? crop.height : dims.height;
+
+    if (cropW === 0 || cropH === 0) {
+      cropX = 0;
+      cropY = 0;
+      cropW = dims.width;
+      cropH = dims.height;
+    }
+
+    const topLeft = imageToDisplay(cropX, cropY);
+    const bottomRight = imageToDisplay(cropX + cropW, cropY + cropH);
+    const handleSize = 15;
+
+    const handleAreas = [
+      { x: topLeft.x, y: topLeft.y, handle: 'nw' as CropHandle },
+      { x: topLeft.x + (bottomRight.x - topLeft.x) / 2, y: topLeft.y, handle: 'n' as CropHandle },
+      { x: bottomRight.x, y: topLeft.y, handle: 'ne' as CropHandle },
+      { x: bottomRight.x, y: topLeft.y + (bottomRight.y - topLeft.y) / 2, handle: 'e' as CropHandle },
+      { x: bottomRight.x, y: bottomRight.y, handle: 'se' as CropHandle },
+      { x: topLeft.x + (bottomRight.x - topLeft.x) / 2, y: bottomRight.y, handle: 's' as CropHandle },
+      { x: topLeft.x, y: bottomRight.y, handle: 'sw' as CropHandle },
+      { x: topLeft.x, y: topLeft.y + (bottomRight.y - topLeft.y) / 2, handle: 'w' as CropHandle },
+    ];
+
+    for (const area of handleAreas) {
+      if (
+        mouseX >= area.x - handleSize &&
+        mouseX <= area.x + handleSize &&
+        mouseY >= area.y - handleSize &&
+        mouseY <= area.y + handleSize
+      ) {
+        setIsDragging(true);
+        setDragHandle(area.handle);
+        setDragStartX(mouseX);
+        setDragStartY(mouseY);
+        setDragStartCrop({ ...crop, x: cropX, y: cropY, width: cropW, height: cropH });
+        return;
+      }
+    }
+
+    if (
+      mouseX >= topLeft.x &&
+      mouseX <= bottomRight.x &&
+      mouseY >= topLeft.y &&
+      mouseY <= bottomRight.y
+    ) {
+      setIsDragging(true);
+      setDragHandle('move');
+      setDragStartX(mouseX);
+      setDragStartY(mouseY);
+      setDragStartCrop({ ...crop, x: cropX, y: cropY, width: cropW, height: cropH });
+    }
+  }, [options.crop, activeTab, getTransformedDimensions, imageToDisplay]);
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!isDragging || !dragHandle || !dragStartCrop || !canvasRef.current) return;
+
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const deltaX = (mouseX - dragStartX) / displayScale;
+    const deltaY = (mouseY - dragStartY) / displayScale;
+
+    const dims = getTransformedDimensions();
+    const imgWidth = dims.width;
+    const imgHeight = dims.height;
+
+    let newX = dragStartCrop.x;
+    let newY = dragStartCrop.y;
+    let newW = dragStartCrop.width;
+    let newH = dragStartCrop.height;
+
+    switch (dragHandle) {
+      case 'move':
+        newX = Math.max(0, Math.min(imgWidth - newW, dragStartCrop.x + deltaX));
+        newY = Math.max(0, Math.min(imgHeight - newH, dragStartCrop.y + deltaY));
+        break;
+      case 'nw':
+        newX = Math.max(0, dragStartCrop.x + deltaX);
+        newY = Math.max(0, dragStartCrop.y + deltaY);
+        newW = Math.max(50, dragStartCrop.width - deltaX);
+        newH = Math.max(50, dragStartCrop.height - deltaY);
+        break;
+      case 'n':
+        newY = Math.max(0, dragStartCrop.y + deltaY);
+        newH = Math.max(50, dragStartCrop.height - deltaY);
+        break;
+      case 'ne':
+        newY = Math.max(0, dragStartCrop.y + deltaY);
+        newW = Math.max(50, Math.min(imgWidth - dragStartCrop.x, dragStartCrop.width + deltaX));
+        newH = Math.max(50, dragStartCrop.height - deltaY);
+        break;
+      case 'e':
+        newW = Math.max(50, Math.min(imgWidth - dragStartCrop.x, dragStartCrop.width + deltaX));
+        break;
+      case 'se':
+        newW = Math.max(50, Math.min(imgWidth - dragStartCrop.x, dragStartCrop.width + deltaX));
+        newH = Math.max(50, Math.min(imgHeight - dragStartCrop.y, dragStartCrop.height + deltaY));
+        break;
+      case 's':
+        newH = Math.max(50, Math.min(imgHeight - dragStartCrop.y, dragStartCrop.height + deltaY));
+        break;
+      case 'sw':
+        newX = Math.max(0, dragStartCrop.x + deltaX);
+        newW = Math.max(50, dragStartCrop.width - deltaX);
+        newH = Math.max(50, Math.min(imgHeight - dragStartCrop.y, dragStartCrop.height + deltaY));
+        break;
+      case 'w':
+        newX = Math.max(0, dragStartCrop.x + deltaX);
+        newW = Math.max(50, dragStartCrop.width - deltaX);
+        break;
+    }
+
+    if (options.crop.ratio !== 'free') {
+      const ratioInfo = cropRatios.find(r => r.value === options.crop.ratio);
+      if (ratioInfo && ratioInfo.width && ratioInfo.height) {
+        const targetRatio = ratioInfo.width / ratioInfo.height;
+        if (dragHandle === 'move' || dragHandle === 'n' || dragHandle === 's') {
+          newW = Math.round(newH * targetRatio);
+        } else {
+          newH = Math.round(newW / targetRatio);
+        }
+        newX = Math.max(0, Math.min(imgWidth - newW, newX));
+        newY = Math.max(0, Math.min(imgHeight - newH, newY));
+      }
+    }
+
+    onOptionsChange({
+      crop: {
+        ...options.crop,
+        x: Math.round(newX),
+        y: Math.round(newY),
+        width: Math.round(newW),
+        height: Math.round(newH),
+      },
+    });
+  }, [isDragging, dragHandle, dragStartX, dragStartY, dragStartCrop, displayScale, getTransformedDimensions, options.crop, onOptionsChange]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+    setDragHandle(null);
+    setDragStartCrop(null);
+  }, []);
 
   useEffect(() => {
     if (isOpen && originalImage) {
       renderPreview();
     }
   }, [isOpen, originalImage, renderPreview]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isOpen, handleMouseMove, handleMouseUp]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -342,14 +637,15 @@ function EditorPanel({
   };
 
   const handleToggleCrop = () => {
+    const dims = getTransformedDimensions();
     onOptionsChange({
       crop: {
         ...options.crop,
         enabled: !options.crop.enabled,
         x: 0,
         y: 0,
-        width: originalImage?.width || 0,
-        height: originalImage?.height || 0,
+        width: dims.width || originalImage?.width || 0,
+        height: dims.height || originalImage?.height || 0,
       },
     });
   };
@@ -411,7 +707,9 @@ function EditorPanel({
               style={{
                 opacity: isRendering ? 0.5 : 1,
                 transition: 'opacity 150ms ease',
+                cursor: options.crop.enabled && activeTab === 'crop' ? 'crosshair' : 'default',
               }}
+              onMouseDown={handleMouseDown}
             />
           ) : (
             <div style={{ color: '#666' }}>No image loaded</div>
@@ -532,9 +830,22 @@ function EditorPanel({
                     </div>
 
                     <div class={style.cropInfo}>
-                      Note: Crop is applied after rotation and flip. For precise control, 
-                      apply transformations first, then adjust crop.
+                      Drag the crop box or handles to adjust. Use aspect ratio buttons for
+                      fixed proportions.
                     </div>
+
+                    {options.crop.width > 0 && (
+                      <div style={{ marginTop: '16px', padding: '12px', background: 'var(--off-black)', borderRadius: '8px' }}>
+                        <div style={{ fontSize: '0.8rem', color: '#666', marginBottom: '8px' }}>
+                          Crop Dimensions
+                        </div>
+                        <div style={{ fontSize: '0.85rem', color: '#999', lineHeight: '1.6' }}>
+                          <div>Position: ({options.crop.x}, {options.crop.y})</div>
+                          <div>Size: {options.crop.width} × {options.crop.height}</div>
+                          <div>Ratio: {options.crop.ratio}</div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
