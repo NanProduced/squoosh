@@ -21,6 +21,16 @@ import 'shared/custom-els/snack-bar';
 import { startBlobs } from './blob-anim/meta';
 import SlideOnScroll from './SlideOnScroll';
 
+import {
+  isValidUrl,
+  fetchWithLimits,
+  getFilenameFromUrl,
+  extractImageFromClipboardEvent,
+  extractUrlsFromDragEvent,
+  extractFilesFromDragEvent,
+  RecentFileMetadata,
+} from 'client/lazy-app/util/import-utils';
+
 const demos = [
   {
     description: 'Large photo',
@@ -71,31 +81,41 @@ async function getImageClipboardItem(
 
 interface Props {
   onFile?: (file: File) => void;
+  onUrlImport?: (url: string, file: File) => void;
   showSnack?: SnackBarElement['showSnackbar'];
+  recentFiles?: RecentFileMetadata[];
+  onRecentFileClick?: (metadata: RecentFileMetadata) => void;
 }
+
 interface State {
   fetchingDemoIndex?: number;
   beforeInstallEvent?: BeforeInstallPromptEvent;
   showBlobSVG: boolean;
+  urlInputValue: string;
+  isFetchingUrl: boolean;
 }
 
 export default class Intro extends Component<Props, State> {
   state: State = {
     showBlobSVG: true,
+    urlInputValue: '',
+    isFetchingUrl: false,
   };
   private fileInput?: HTMLInputElement;
   private blobCanvas?: HTMLCanvasElement;
+  private urlInput?: HTMLInputElement;
   private installingViaButton = false;
+  private abortController?: AbortController;
 
   componentDidMount() {
-    // Listen for beforeinstallprompt events, indicating Squoosh is installable.
     window.addEventListener(
       'beforeinstallprompt',
       this.onBeforeInstallPromptEvent,
     );
 
-    // Listen for the appinstalled event, indicating Squoosh has been installed.
     window.addEventListener('appinstalled', this.onAppInstalled);
+
+    window.addEventListener('paste', this.onGlobalPaste);
 
     if (blobAnimImport) {
       blobAnimImport.then((module) => {
@@ -115,6 +135,11 @@ export default class Intro extends Component<Props, State> {
       this.onBeforeInstallPromptEvent,
     );
     window.removeEventListener('appinstalled', this.onAppInstalled);
+    window.removeEventListener('paste', this.onGlobalPaste);
+
+    if (this.abortController) {
+      this.abortController.abort();
+    }
   }
 
   private onFileChange = (event: Event): void => {
@@ -135,21 +160,100 @@ export default class Intro extends Component<Props, State> {
       const demo = demos[index];
       const blob = await fetch(demo.url).then((r) => r.blob());
       const file = new File([blob], demo.filename, { type: blob.type });
-      this.props.onFile!(file);
+      
+      if (this.props.onUrlImport) {
+        this.props.onUrlImport(demo.url, file);
+      } else {
+        this.props.onFile!(file);
+      }
     } catch (err) {
       this.setState({ fetchingDemoIndex: undefined });
       this.props.showSnack!("Couldn't fetch demo image");
     }
   };
 
-  private onBeforeInstallPromptEvent = (event: BeforeInstallPromptEvent) => {
-    // Don't show the mini-infobar on mobile
+  private onUrlInputChange = (event: Event): void => {
+    const input = event.target as HTMLInputElement;
+    this.setState({ urlInputValue: input.value });
+  };
+
+  private onUrlInputKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'Enter') {
+      this.fetchFromUrl();
+    }
+  };
+
+  private fetchFromUrl = async (): Promise<void> => {
+    const { urlInputValue } = this.state;
+    
+    if (!urlInputValue.trim()) {
+      return;
+    }
+
+    if (!isValidUrl(urlInputValue)) {
+      this.props.showSnack!('Please enter a valid URL (http:// or https://)');
+      return;
+    }
+
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+
+    this.abortController = new AbortController();
+    this.setState({ isFetchingUrl: true });
+
+    try {
+      const blob = await fetchWithLimits(urlInputValue, {
+        signal: this.abortController.signal,
+      });
+
+      if (!blob.type.startsWith('image/')) {
+        this.props.showSnack!('The URL does not point to a valid image');
+        return;
+      }
+
+      const filename = getFilenameFromUrl(urlInputValue);
+      const file = new File([blob], filename, { type: blob.type });
+
+      if (this.props.onUrlImport) {
+        this.props.onUrlImport(urlInputValue, file);
+      } else {
+        this.props.onFile!(file);
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return;
+      }
+      this.props.showSnack!(err instanceof Error ? err.message : 'Failed to fetch image from URL');
+    } finally {
+      this.setState({ isFetchingUrl: false });
+    }
+  };
+
+  private onGlobalPaste = async (event: ClipboardEvent): Promise<void> => {
+    if (event.target instanceof HTMLInputElement || 
+        event.target instanceof HTMLTextAreaElement ||
+        (event.target as HTMLElement).isContentEditable) {
+      return;
+    }
+
+    const blob = await extractImageFromClipboardEvent(event);
+
+    if (!blob) {
+      return;
+    }
+
     event.preventDefault();
 
-    // Save the beforeinstallprompt event so it can be called later.
+    const file = new File([blob], 'pasted-image.unknown', { type: blob.type });
+    this.props.onFile!(file);
+  };
+
+  private onBeforeInstallPromptEvent = (event: BeforeInstallPromptEvent) => {
+    event.preventDefault();
+
     this.setState({ beforeInstallEvent: event });
 
-    // Log the event.
     const gaEventInfo = {
       eventCategory: 'pwa-install',
       eventAction: 'promo-shown',
@@ -159,19 +263,14 @@ export default class Intro extends Component<Props, State> {
   };
 
   private onInstallClick = async (event: Event) => {
-    // Get the deferred beforeinstallprompt event
     const beforeInstallEvent = this.state.beforeInstallEvent;
-    // If there's no deferred prompt, bail.
     if (!beforeInstallEvent) return;
 
     this.installingViaButton = true;
 
-    // Show the browser install prompt
     beforeInstallEvent.prompt();
 
-    // Wait for the user to accept or dismiss the install prompt
     const { outcome } = await beforeInstallEvent.userChoice;
-    // Send the analytics data
     const gaEventInfo = {
       eventCategory: 'pwa-install',
       eventAction: 'promo-clicked',
@@ -180,24 +279,19 @@ export default class Intro extends Component<Props, State> {
     };
     ga('send', 'event', gaEventInfo);
 
-    // If the prompt was dismissed, we aren't going to install via the button.
     if (outcome === 'dismissed') {
       this.installingViaButton = false;
     }
   };
 
   private onAppInstalled = () => {
-    // We don't need the install button, if it's shown
     this.setState({ beforeInstallEvent: undefined });
 
-    // Don't log analytics if page is not visible
     if (document.hidden) return;
 
-    // Try to get the install, if it's not set, use 'browser'
     const source = this.installingViaButton ? installButtonSource : 'browser';
     ga('send', 'event', 'pwa-install', 'installed', source);
 
-    // Clear the install method property
     this.installingViaButton = false;
   };
 
@@ -221,10 +315,20 @@ export default class Intro extends Component<Props, State> {
     this.props.onFile!(new File([blob], 'image.unknown'));
   };
 
+  private onRecentFileClick = async (metadata: RecentFileMetadata): Promise<void> => {
+    if (!this.props.onRecentFileClick) {
+      return;
+    }
+
+    this.props.onRecentFileClick(metadata);
+  };
+
   render(
     {}: Props,
-    { fetchingDemoIndex, beforeInstallEvent, showBlobSVG }: State,
+    { fetchingDemoIndex, beforeInstallEvent, showBlobSVG, urlInputValue, isFetchingUrl }: State,
   ) {
+    const { recentFiles } = this.props;
+
     return (
       <div class={style.intro}>
         <input
@@ -294,9 +398,72 @@ export default class Intro extends Component<Props, State> {
                   'Paste'
                 )}
               </div>
+              
+              <div class={style.urlInputContainer}>
+                <input
+                  ref={linkRef(this, 'urlInput')}
+                  type="text"
+                  class={style.urlInput}
+                  placeholder="Or paste an image URL..."
+                  value={urlInputValue}
+                  onInput={this.onUrlInputChange}
+                  onKeyDown={this.onUrlInputKeyDown}
+                />
+                <button
+                  class={style.urlFetchBtn}
+                  onClick={this.fetchFromUrl}
+                  disabled={isFetchingUrl || !urlInputValue.trim()}
+                >
+                  {isFetchingUrl ? (
+                    <loading-spinner class={style.urlFetchSpinner} />
+                  ) : (
+                    'Fetch'
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
+
+        {recentFiles && recentFiles.length > 0 && (
+          <div class={style.recentFilesContainer}>
+            <p class={style.recentFilesTitle}>
+              <strong>Recent</strong> images:
+            </p>
+            <div class={style.recentFiles}>
+              {recentFiles.map((file, i) => (
+                <button
+                  key={i}
+                  class="unbutton"
+                  onClick={() => this.onRecentFileClick(file)}
+                >
+                  <div class={style.recentFileContainer}>
+                    <div class={style.recentFileIconContainer}>
+                      {file.previewDataUrl ? (
+                        <img
+                          class={style.recentFileIcon}
+                          src={file.previewDataUrl}
+                          alt={file.filename}
+                        />
+                      ) : (
+                        <div class={style.recentFilePlaceholder}>
+                          <span>No preview</span>
+                        </div>
+                      )}
+                    </div>
+                    <div class={style.recentFileInfo}>
+                      <div class={style.recentFileName}>{file.filename}</div>
+                      <div class={style.recentFileSize}>
+                        {(file.size / 1024).toFixed(1)} KB
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div class={style.demosContainer}>
           <svg viewBox="0 0 1920 140" class={style.topWave}>
             <path
