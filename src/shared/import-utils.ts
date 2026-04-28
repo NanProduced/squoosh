@@ -3,10 +3,27 @@
  * 包含URL校验、元数据序列化、带超时和大小限制的fetch函数
  */
 
-import { abortable, assertSignal } from './index';
-
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const FETCH_TIMEOUT = 30000; // 30秒超时
+
+function assertSignal(signal: AbortSignal) {
+  if (signal.aborted) throw new DOMException('AbortError', 'AbortError');
+}
+
+async function abortable<T>(
+  signal: AbortSignal,
+  promise: Promise<T>,
+): Promise<T> {
+  assertSignal(signal);
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      signal.addEventListener('abort', () =>
+        reject(new DOMException('AbortError', 'AbortError')),
+      );
+    }),
+  ]);
+}
 
 /**
  * 校验URL是否有效
