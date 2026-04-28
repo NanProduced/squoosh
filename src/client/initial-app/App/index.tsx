@@ -12,7 +12,7 @@ import 'shared/custom-els/snack-bar';
 import Intro from 'shared/prerendered-app/Intro';
 import 'shared/custom-els/loading-spinner';
 
-import { get, set, del, createStore } from 'idb-keyval';
+import { get, set, Store } from 'idb-keyval';
 import {
   RecentFileMetadata,
   fetchWithLimits,
@@ -20,12 +20,12 @@ import {
   isValidUrl,
   extractUrlsFromDragEvent,
   extractFilesFromDragEvent,
-} from 'client/lazy-app/util/import-utils';
+} from 'shared/import-utils';
 
 const RECENT_FILES_KEY = 'squoosh-recent-files';
 const MAX_RECENT_FILES = 10;
 
-const recentFilesStore = createStore('squoosh-db', 'recent-files');
+const recentFilesStore = new Store('squoosh-db', 'recent-files');
 
 const ROUTE_EDITOR = '/editor';
 

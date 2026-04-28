@@ -29,7 +29,7 @@ import {
   extractUrlsFromDragEvent,
   extractFilesFromDragEvent,
   RecentFileMetadata,
-} from 'client/lazy-app/util/import-utils';
+} from 'shared/import-utils';
 
 const demos = [
   {
@@ -230,23 +230,27 @@ export default class Intro extends Component<Props, State> {
     }
   };
 
-  private onGlobalPaste = async (event: ClipboardEvent): Promise<void> => {
+  private onGlobalPaste = (event: Event): void => {
+    const clipboardEvent = event as ClipboardEvent;
+    
     if (event.target instanceof HTMLInputElement || 
         event.target instanceof HTMLTextAreaElement ||
         (event.target as HTMLElement).isContentEditable) {
       return;
     }
 
-    const blob = await extractImageFromClipboardEvent(event);
+    extractImageFromClipboardEvent(clipboardEvent).then((blob) => {
+      if (!blob) {
+        return;
+      }
 
-    if (!blob) {
-      return;
-    }
+      event.preventDefault();
 
-    event.preventDefault();
-
-    const file = new File([blob], 'pasted-image.unknown', { type: blob.type });
-    this.props.onFile!(file);
+      const file = new File([blob], 'pasted-image.unknown', { type: blob.type });
+      this.props.onFile!(file);
+    }).catch(() => {
+      // 静默失败
+    });
   };
 
   private onBeforeInstallPromptEvent = (event: BeforeInstallPromptEvent) => {

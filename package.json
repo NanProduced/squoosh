@@ -9,9 +9,7 @@
     "dev": "run-p watch serve",
     "watch": "rollup -cw",
     "serve": "serve --listen=5000 --config ../../../serve.json .tmp/build/static",
-    "prepare": "husky install",
-    "test": "jest",
-    "test:watch": "jest --watch"
+    "prepare": "husky install"
   },
   "devDependencies": {
     "@rollup/plugin-commonjs": "^17.0.0",
@@ -49,7 +47,6 @@
     "prettier": "^2.4.1",
     "rollup": "^2.79.1",
     "serve": "^11.3.2",
-    "ts-jest": "^29.4.9",
     "typescript": "^4.4.4",
     "wasm-feature-detect": "^1.2.11",
     "which": "^2.0.2"
