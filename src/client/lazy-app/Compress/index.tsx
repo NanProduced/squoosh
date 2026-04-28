@@ -33,6 +33,20 @@ import { resize } from 'features/processors/resize/client';
 import type SnackBarElement from 'shared/custom-els/snack-bar';
 import { drawableToImageData } from '../util/canvas';
 
+import EditorPanel from '../edit/EditorPanel';
+import { CommandStack, createCommand, isSignificantChange } from '../edit/command-stack';
+import {
+  saveEditState,
+  loadEditState,
+  clearEditState,
+  hasEdits,
+} from '../edit/persistence';
+import {
+  Options as EditOptions,
+  defaultOptions as defaultEditOptions,
+  EditCommand,
+} from 'features/preprocessors/edit/shared/meta';
+
 export type OutputType = EncoderType | 'identity';
 
 export interface SourceImage {
@@ -71,6 +85,11 @@ interface State {
   mobileView: boolean;
   preprocessorState: PreprocessorState;
   encodedPreprocessorState?: PreprocessorState;
+  /** Edit panel state */
+  isEditorOpen: boolean;
+  editOptions: EditOptions;
+  canUndo: boolean;
+  canRedo: boolean;
 }
 
 interface MainJob {
@@ -133,7 +152,13 @@ async function preprocessImage(
   assertSignal(signal);
   let processedData = data;
 
-  if (preprocessorState.rotate.rotate !== 0) {
+  if (preprocessorState.edit && hasEdits(preprocessorState.edit)) {
+    processedData = await workerBridge.edit(
+      signal,
+      processedData,
+      preprocessorState.edit,
+    );
+  } else if (preprocessorState.rotate.rotate !== 0) {
     processedData = await workerBridge.rotate(
       signal,
       processedData,
@@ -315,6 +340,10 @@ export default class Compress extends Component<Props, State> {
           },
     ],
     mobileView: this.widthQuery.matches,
+    isEditorOpen: false,
+    editOptions: JSON.parse(JSON.stringify(defaultEditOptions)),
+    canUndo: false,
+    canRedo: false,
   };
 
   private readonly encodeCache = new ResultCache();
@@ -326,6 +355,8 @@ export default class Compress extends Component<Props, State> {
   private sideAbortControllers = [new AbortController(), new AbortController()];
   /** For debouncing calls to updateImage for each side. */
   private updateImageTimeout?: number;
+  /** Command stack for undo/redo */
+  private readonly commandStack = new CommandStack();
 
   constructor(props: Props) {
     super(props);
@@ -334,6 +365,26 @@ export default class Compress extends Component<Props, State> {
     this.queueUpdateImage({ immediate: true });
 
     import('../sw-bridge').then(({ mainAppLoaded }) => mainAppLoaded());
+  }
+
+  componentDidMount(): void {
+    this.loadEditHistory();
+  }
+
+  private async loadEditHistory(): Promise<void> {
+    try {
+      const savedState = await loadEditState(this.props.file.name);
+      if (savedState) {
+        this.commandStack.restore(savedState.commandStack);
+        this.setState({
+          editOptions: savedState.options,
+          canUndo: this.commandStack.canUndo,
+          canRedo: this.commandStack.canRedo,
+        });
+      }
+    } catch (err) {
+      console.log('Failed to load edit history:', err);
+    }
   }
 
   private onMobileWidthChange = () => {
@@ -566,6 +617,200 @@ export default class Compress extends Component<Props, State> {
             );
           }) as [Side, Side]),
     }));
+  };
+
+  private onOpenEditor = (): void => {
+    if (!this.state.source) return;
+
+    if (this.state.editOptions.crop.width === 0 && this.state.source) {
+      this.setState((state) => ({
+        isEditorOpen: true,
+        editOptions: {
+          ...state.editOptions,
+          crop: {
+            ...state.editOptions.crop,
+            x: 0,
+            y: 0,
+            width: state.source!.preprocessed.width,
+            height: state.source!.preprocessed.height,
+          },
+        },
+      }));
+    } else {
+      this.setState({ isEditorOpen: true });
+    }
+  };
+
+  private onCloseEditor = (): void => {
+    this.setState({ isEditorOpen: false });
+  };
+
+  private onEditOptionsChange = (changes: Partial<EditOptions>): void => {
+    const previousOptions = JSON.parse(JSON.stringify(this.state.editOptions));
+
+    this.setState((state) => {
+      const newOptions = {
+        ...state.editOptions,
+        ...changes,
+        crop: changes.crop
+          ? { ...state.editOptions.crop, ...changes.crop }
+          : state.editOptions.crop,
+        rotate: changes.rotate
+          ? { ...state.editOptions.rotate, ...changes.rotate }
+          : state.editOptions.rotate,
+        flip: changes.flip
+          ? { ...state.editOptions.flip, ...changes.flip }
+          : state.editOptions.flip,
+        filters: changes.filters
+          ? { ...state.editOptions.filters, ...changes.filters }
+          : state.editOptions.filters,
+      };
+
+      let commandType: EditCommand['type'] | null = null;
+      let previousState: any = {};
+      let newState: any = {};
+
+      if (changes.rotate && previousOptions.rotate.rotate !== newOptions.rotate.rotate) {
+        commandType = 'rotate';
+        previousState = { rotate: previousOptions.rotate };
+        newState = { rotate: newOptions.rotate };
+      } else if (changes.flip) {
+        if (
+          previousOptions.flip.horizontal !== newOptions.flip.horizontal ||
+          previousOptions.flip.vertical !== newOptions.flip.vertical
+        ) {
+          commandType = 'flip';
+          previousState = { flip: previousOptions.flip };
+          newState = { flip: newOptions.flip };
+        }
+      } else if (changes.filters) {
+        commandType = 'filters';
+        previousState = { filters: previousOptions.filters };
+        newState = { filters: newOptions.filters };
+      } else if (changes.crop) {
+        commandType = 'crop';
+        previousState = { crop: previousOptions.crop };
+        newState = { crop: newOptions.crop };
+      }
+
+      if (commandType && isSignificantChange(previousState, newState, commandType)) {
+        const command = createCommand(commandType, previousState, newState);
+        this.commandStack.push(command);
+
+        saveEditState(newOptions, this.commandStack.getState(), this.props.file.name).catch(
+          (err) => console.log('Failed to save edit state:', err)
+        );
+      }
+
+      return {
+        editOptions: newOptions,
+        canUndo: this.commandStack.canUndo,
+        canRedo: this.commandStack.canRedo,
+      };
+    });
+  };
+
+  private onUndo = (): void => {
+    if (!this.commandStack.canUndo) return;
+
+    const newOptions = this.commandStack.undo(this.state.editOptions);
+    if (newOptions) {
+      this.setState({
+        editOptions: newOptions,
+        canUndo: this.commandStack.canUndo,
+        canRedo: this.commandStack.canRedo,
+      });
+
+      saveEditState(newOptions, this.commandStack.getState(), this.props.file.name).catch(
+        (err) => console.log('Failed to save edit state:', err)
+      );
+    }
+  };
+
+  private onRedo = (): void => {
+    if (!this.commandStack.canRedo) return;
+
+    const newOptions = this.commandStack.redo(this.state.editOptions);
+    if (newOptions) {
+      this.setState({
+        editOptions: newOptions,
+        canUndo: this.commandStack.canUndo,
+        canRedo: this.commandStack.canRedo,
+      });
+
+      saveEditState(newOptions, this.commandStack.getState(), this.props.file.name).catch(
+        (err) => console.log('Failed to save edit state:', err)
+      );
+    }
+  };
+
+  private onApplyEdits = async (): Promise<void> => {
+    if (!this.state.source) return;
+
+    try {
+      this.setState({ loading: true, isEditorOpen: false });
+
+      const newPreprocessorState = cleanMerge(
+        this.state.preprocessorState,
+        'edit',
+        JSON.parse(JSON.stringify(this.state.editOptions))
+      );
+
+      if (this.state.editOptions.rotate.rotate !== this.state.preprocessorState.rotate.rotate) {
+        newPreprocessorState.rotate = {
+          rotate: this.state.editOptions.rotate.rotate as 0 | 90 | 180 | 270,
+        };
+      }
+
+      const oldRotate = this.state.preprocessorState.rotate.rotate;
+      const newRotate = newPreprocessorState.edit.rotate.rotate;
+      const orientationChanged = oldRotate % 180 !== newRotate % 180;
+
+      this.setState((state) => ({
+        loading: true,
+        preprocessorState: newPreprocessorState,
+        sides: !orientationChanged
+          ? state.sides
+          : (state.sides.map((side) => {
+              const currentResizeSettings =
+                side.latestSettings.processorState.resize;
+              const resizeSettings: Partial<ProcessorState['resize']> = {
+                width: currentResizeSettings.height,
+                height: currentResizeSettings.width,
+              };
+              return cleanMerge(
+                side,
+                'latestSettings.processorState.resize',
+                resizeSettings,
+              );
+            }) as [Side, Side]),
+      }));
+
+      await this.props.showSnack('Edits applied', { timeout: 2000 });
+    } catch (err) {
+      this.props.showSnack(`Failed to apply edits: ${err}`);
+      this.setState({ loading: false });
+    }
+  };
+
+  private onResetEdits = (): void => {
+    const defaultOpts = JSON.parse(JSON.stringify(defaultEditOptions));
+    if (this.state.source) {
+      defaultOpts.crop.x = 0;
+      defaultOpts.crop.y = 0;
+      defaultOpts.crop.width = this.state.source.preprocessed.width;
+      defaultOpts.crop.height = this.state.source.preprocessed.height;
+    }
+
+    this.commandStack.clear();
+
+    this.setState({
+      editOptions: defaultOpts,
+      canUndo: false,
+      canRedo: false,
+    });
+
+    clearEditState().catch((err) => console.log('Failed to clear edit state:', err));
   };
 
   /**
@@ -920,7 +1165,7 @@ export default class Compress extends Component<Props, State> {
 
   render(
     { onBack }: Props,
-    { loading, sides, source, mobileView, preprocessorState }: State,
+    { loading, sides, source, mobileView, preprocessorState, isEditorOpen, editOptions, canUndo, canRedo }: State,
   ) {
     const [leftSide, rightSide] = sides;
     const [leftImageData, rightImageData] = sides.map((i) => i.data);
@@ -980,7 +1225,23 @@ export default class Compress extends Component<Props, State> {
           rightImgContain={rightImgContain}
           preprocessorState={preprocessorState}
           onPreprocessorChange={this.onPreprocessorChange}
+          onEditClick={source ? this.onOpenEditor : undefined}
         />
+        {isEditorOpen && (
+          <EditorPanel
+            isOpen={isEditorOpen}
+            options={editOptions}
+            originalImage={source?.decoded}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onClose={this.onCloseEditor}
+            onApply={this.onApplyEdits}
+            onReset={this.onResetEdits}
+            onOptionsChange={this.onEditOptionsChange}
+            onUndo={this.onUndo}
+            onRedo={this.onRedo}
+          />
+        )}
         <button class={style.back} onClick={onBack}>
           <svg viewBox="0 0 61 53.3">
             <title>Back</title>

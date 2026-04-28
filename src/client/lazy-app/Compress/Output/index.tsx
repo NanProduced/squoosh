@@ -14,6 +14,7 @@ import {
   RemoveIcon,
   ToggleBackgroundActiveIcon,
   RotateIcon,
+  EditIcon,
 } from '../../icons';
 import { twoUpHandle } from './custom-els/TwoUp/styles.css';
 import type { PreprocessorState } from '../../feature-meta';
@@ -30,6 +31,7 @@ interface Props {
   leftImgContain: boolean;
   rightImgContain: boolean;
   onPreprocessorChange: (newState: PreprocessorState) => void;
+  onEditClick?: () => void;
 }
 
 interface State {
@@ -263,7 +265,7 @@ export default class Output extends Component<Props, State> {
   };
 
   render(
-    { mobileView, leftImgContain, rightImgContain, source }: Props,
+    { mobileView, leftImgContain, rightImgContain, source, onEditClick }: Props,
     { scale, editingScale, altBackground, aliasing }: State,
   ) {
     const leftDraw = this.leftDrawable();
@@ -369,6 +371,15 @@ export default class Output extends Component<Props, State> {
             >
               <RotateIcon />
             </button>
+            {onEditClick && (
+              <button
+                class={style.button}
+                onClick={onEditClick}
+                title="Edit Image (Crop, Flip, Filters)"
+              >
+                <EditIcon />
+              </button>
+            )}
             {!isSafari && (
               <button
                 class={style.button}

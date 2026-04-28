@@ -60,3 +60,28 @@ declare var ga: {
 };
 
 declare const __PRODUCTION__: boolean;
+
+declare class OffscreenCanvas {
+  width: number;
+  height: number;
+  constructor(width: number, height: number);
+  getContext(contextId: '2d', contextAttributes?: any): OffscreenCanvasRenderingContext2D | null;
+  getContext(contextId: 'webgl' | 'webgl2', contextAttributes?: any): any;
+  convertToBlob(options?: { type?: string; quality?: number }): Promise<Blob>;
+}
+
+interface OffscreenCanvasRenderingContext2D {
+  readonly canvas: OffscreenCanvas;
+  filter: string;
+  clearRect(x: number, y: number, w: number, h: number): void;
+  getImageData(sx: number, sy: number, sw: number, sh: number): ImageData;
+  putImageData(imagedata: ImageData, dx: number, dy: number, dirtyX?: number, dirtyY?: number, dirtyWidth?: number, dirtyHeight?: number): void;
+  drawImage(image: any, dx: number, dy: number): void;
+  drawImage(image: any, dx: number, dy: number, dw: number, dh: number): void;
+  drawImage(image: any, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number): void;
+  rotate(angle: number): void;
+  scale(x: number, y: number): void;
+  translate(x: number, y: number): void;
+  save(): void;
+  restore(): void;
+}
