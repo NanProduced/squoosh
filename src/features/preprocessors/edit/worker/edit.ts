@@ -84,32 +84,27 @@ function applyRotate(imageData: ImageData, rotate: RotateState): ImageData {
 function applyFlip(imageData: ImageData, flip: FlipState): ImageData {
   if (!flip.horizontal && !flip.vertical) return imageData;
   
-  const ctx = getOrCreateCanvas(imageData.width, imageData.height);
-  ctx.clearRect(0, 0, imageData.width, imageData.height);
-  ctx.putImageData(imageData, 0, 0);
+  const sourceCanvas = new OffscreenCanvas(imageData.width, imageData.height);
+  const sourceCtx = sourceCanvas.getContext('2d', { willReadFrequently: true })!;
+  sourceCtx.putImageData(imageData, 0, 0);
   
-  const resultCtx = getOrCreateCanvas(imageData.width, imageData.height);
-  resultCtx.clearRect(0, 0, imageData.width, imageData.height);
+  const resultCanvas = new OffscreenCanvas(imageData.width, imageData.height);
+  const resultCtx = resultCanvas.getContext('2d', { willReadFrequently: true })!;
   
   resultCtx.save();
   
-  let scaleX = 1;
-  let scaleY = 1;
-  let translateX = 0;
-  let translateY = 0;
-  
-  if (flip.horizontal) {
-    scaleX = -1;
-    translateX = -imageData.width;
-  }
-  if (flip.vertical) {
-    scaleY = -1;
-    translateY = -imageData.height;
+  if (flip.horizontal && flip.vertical) {
+    resultCtx.translate(imageData.width, imageData.height);
+    resultCtx.scale(-1, -1);
+  } else if (flip.horizontal) {
+    resultCtx.translate(imageData.width, 0);
+    resultCtx.scale(-1, 1);
+  } else if (flip.vertical) {
+    resultCtx.translate(0, imageData.height);
+    resultCtx.scale(1, -1);
   }
   
-  resultCtx.translate(translateX, translateY);
-  resultCtx.scale(scaleX, scaleY);
-  resultCtx.drawImage(ctx.canvas, 0, 0);
+  resultCtx.drawImage(sourceCanvas, 0, 0);
   resultCtx.restore();
   
   return resultCtx.getImageData(0, 0, imageData.width, imageData.height);
@@ -124,12 +119,12 @@ function applyFilters(imageData: ImageData, filters: FiltersState): ImageData {
     return imageData;
   }
   
-  const ctx = getOrCreateCanvas(imageData.width, imageData.height);
-  ctx.clearRect(0, 0, imageData.width, imageData.height);
-  ctx.putImageData(imageData, 0, 0);
+  const sourceCanvas = new OffscreenCanvas(imageData.width, imageData.height);
+  const sourceCtx = sourceCanvas.getContext('2d', { willReadFrequently: true })!;
+  sourceCtx.putImageData(imageData, 0, 0);
   
-  const resultCtx = getOrCreateCanvas(imageData.width, imageData.height);
-  resultCtx.clearRect(0, 0, imageData.width, imageData.height);
+  const resultCanvas = new OffscreenCanvas(imageData.width, imageData.height);
+  const resultCtx = resultCanvas.getContext('2d', { willReadFrequently: true })!;
   
   let filterString = '';
   
@@ -156,7 +151,7 @@ function applyFilters(imageData: ImageData, filters: FiltersState): ImageData {
     resultCtx.filter = filterString.trim();
   }
   
-  resultCtx.drawImage(ctx.canvas, 0, 0);
+  resultCtx.drawImage(sourceCanvas, 0, 0);
   resultCtx.filter = 'none';
   
   return resultCtx.getImageData(0, 0, imageData.width, imageData.height);

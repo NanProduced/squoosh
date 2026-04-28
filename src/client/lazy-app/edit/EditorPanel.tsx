@@ -117,22 +117,18 @@ function EditorPanel({
         const flippedCtx = flippedCanvas.getContext('2d')!;
 
         flippedCtx.save();
-        let scaleX = 1;
-        let scaleY = 1;
-        let translateX = 0;
-        let translateY = 0;
 
-        if (options.flip.horizontal) {
-          scaleX = -1;
-          translateX = -resultCanvas.width;
-        }
-        if (options.flip.vertical) {
-          scaleY = -1;
-          translateY = -resultCanvas.height;
+        if (options.flip.horizontal && options.flip.vertical) {
+          flippedCtx.translate(resultCanvas.width, resultCanvas.height);
+          flippedCtx.scale(-1, -1);
+        } else if (options.flip.horizontal) {
+          flippedCtx.translate(resultCanvas.width, 0);
+          flippedCtx.scale(-1, 1);
+        } else if (options.flip.vertical) {
+          flippedCtx.translate(0, resultCanvas.height);
+          flippedCtx.scale(1, -1);
         }
 
-        flippedCtx.translate(translateX, translateY);
-        flippedCtx.scale(scaleX, scaleY);
         flippedCtx.drawImage(resultCanvas as any, 0, 0);
         flippedCtx.restore();
 
@@ -160,10 +156,11 @@ function EditorPanel({
           }
 
           if (filterString) {
-            resultCtx.filter = filterString.trim();
             const tempCanvas = new OffscreenCanvas(resultCanvas.width, resultCanvas.height);
             const tempCtx = tempCanvas.getContext('2d')!;
+            tempCtx.filter = filterString.trim();
             tempCtx.drawImage(resultCanvas as any, 0, 0);
+            tempCtx.filter = 'none';
             
             resultCanvas = tempCanvas;
             resultCtx = tempCtx;
@@ -289,10 +286,57 @@ function EditorPanel({
   };
 
   const handleCropRatioChange = (ratio: CropRatio) => {
+    if (!originalImage) {
+      onOptionsChange({
+        crop: {
+          ...options.crop,
+          ratio,
+        },
+      });
+      return;
+    }
+
+    const isOddRotation = options.rotate.rotate === 90 || options.rotate.rotate === 270;
+    const imageWidth = isOddRotation ? originalImage.height : originalImage.width;
+    const imageHeight = isOddRotation ? originalImage.width : originalImage.height;
+
+    const ratioInfo = cropRatios.find(r => r.value === ratio);
+    
+    if (ratio === 'free' || !ratioInfo || !ratioInfo.width || !ratioInfo.height) {
+      onOptionsChange({
+        crop: {
+          ...options.crop,
+          ratio,
+        },
+      });
+      return;
+    }
+
+    const targetRatio = ratioInfo.width / ratioInfo.height;
+    const currentRatio = imageWidth / imageHeight;
+
+    let newWidth: number;
+    let newHeight: number;
+
+    if (currentRatio > targetRatio) {
+      newHeight = imageHeight;
+      newWidth = Math.round(imageHeight * targetRatio);
+    } else {
+      newWidth = imageWidth;
+      newHeight = Math.round(imageWidth / targetRatio);
+    }
+
+    const newX = Math.round((imageWidth - newWidth) / 2);
+    const newY = Math.round((imageHeight - newHeight) / 2);
+
     onOptionsChange({
       crop: {
         ...options.crop,
         ratio,
+        x: newX,
+        y: newY,
+        width: newWidth,
+        height: newHeight,
       },
     });
   };
